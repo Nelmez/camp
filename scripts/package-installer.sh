@@ -61,6 +61,40 @@ if [[ ! -f "$PMA_ARCHIVE" ]]; then
 fi
 cp "$PMA_ARCHIVE" "$APP/Contents/Resources/Camp/stack/phpmyadmin.tar.xz"
 
+SOURCE_DIR="$APP/Contents/Resources/THIRD_PARTY_SOURCES"
+mkdir -p "$SOURCE_DIR"
+for source in \
+  "mariadb-${MARIADB_VERSION}.tar.gz|https://archive.mariadb.org/mariadb-${MARIADB_VERSION}/source/mariadb-${MARIADB_VERSION}.tar.gz" \
+  "proftpd-${PROFTPD_VERSION}.tar.gz|https://github.com/proftpd/proftpd/archive/refs/tags/v${PROFTPD_VERSION}.tar.gz"; do
+  archive="${source%%|*}"
+  url="${source#*|}"
+  cached="$ROOT/build/cache/$archive"
+  if [[ ! -f "$cached" ]]; then
+    curl -fL --retry 5 --retry-delay 2 -o "$cached.partial" "$url"
+    mv "$cached.partial" "$cached"
+  fi
+  cp "$cached" "$SOURCE_DIR/$archive"
+done
+cat > "$SOURCE_DIR/README.txt" << EOF
+Corresponding source archives for Camp's redistributed GPL software.
+
+MariaDB Server ${MARIADB_VERSION} (GPL-2.0-only):
+  mariadb-${MARIADB_VERSION}.tar.gz
+  https://archive.mariadb.org/mariadb-${MARIADB_VERSION}/source/mariadb-${MARIADB_VERSION}.tar.gz
+
+ProFTPD ${PROFTPD_VERSION} (GPL-2.0-or-later):
+  proftpd-${PROFTPD_VERSION}.tar.gz
+  https://github.com/proftpd/proftpd/archive/refs/tags/v${PROFTPD_VERSION}.tar.gz
+
+phpMyAdmin ${PHPMYADMIN_VERSION} (GPL-2.0-or-later) source is included at:
+  Camp/stack/phpmyadmin.tar.xz
+  https://files.phpmyadmin.net/phpMyAdmin/${PHPMYADMIN_VERSION}/phpMyAdmin-${PHPMYADMIN_VERSION}-all-languages.tar.xz
+
+SHA-256 checksums:
+EOF
+(cd "$SOURCE_DIR" && shasum -a 256 *.tar.gz | awk '{print "  " $1 "  " $2}') \
+  >> "$SOURCE_DIR/README.txt"
+
 for binary in "$APP_BIN"; do
   [[ "$(file -b "$binary")" == *"arm64"* ]] || {
     echo "Unexpected non-arm64 executable: $binary" >&2
@@ -86,6 +120,8 @@ for component in bin sbin lib libexec modules share conf etc htdocs icons error 
   fi
 done
 find "$PKG_WORK/root/opt/camp" -depth \( -name '._*' -o -name '.DS_Store' \) -exec rm -rf {} +
+rm -f "$PKG_WORK/root/opt/camp/bin/bison"
+rm -rf "$PKG_WORK/root/opt/camp/share/bison"
 
 while IFS= read -r binary; do
   description="$(file -b "$binary")"

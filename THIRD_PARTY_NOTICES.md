@@ -2,9 +2,11 @@
 
 Camp's stack installer downloads the following pinned upstream releases and
 builds them locally. These projects retain their own copyright and license
-terms. Their complete license and notice files are included with the upstream
-source archives and installed source trees; phpMyAdmin retains its `LICENSE`
-file in the installed web root.
+terms. License and notice files are included in the app bundle under
+`Contents/Resources/THIRD_PARTY_LICENSES`. The matching MariaDB, ProFTPD, and
+phpMyAdmin source archives are also included under `Contents/Resources` so the
+installer carries corresponding source for its redistributed GPL components.
+phpMyAdmin retains its `LICENSE` file in the installed web root.
 
 | Component | Version source | License |
 | --- | --- | --- |
