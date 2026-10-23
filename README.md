@@ -1,0 +1,38 @@
+# Camp
+
+Camp is a native macOS control panel and local web stack inspired by XAMPP. It manages Apache HTTP Server, PHP, MariaDB, Perl, ProFTPD, and phpMyAdmin as separate processes. Camp targets macOS 14 and newer on Apple silicon Macs (M1 and later).
+
+## Build the app
+
+From this directory:
+
+```sh
+./scripts/bundle-app.sh
+```
+
+The script creates `dist/Camp.app`. The app bundle includes the stack installer and configuration templates, so it can install the server stack after it is moved out of the source checkout. The build downloads pinned upstream source archives and compiles them locally on an Apple silicon Mac. Archive downloads are cached in `build/cache` for a source checkout or `~/Library/Caches/Camp/downloads` for a packaged app.
+
+## Release package
+
+Run `./scripts/package-installer.sh` on an Apple silicon Mac with Xcode command line tools and valid Apple Developer ID Application and Developer ID Installer certificates installed. Set `CAMP_APP_SIGN_IDENTITY` and `CAMP_INSTALLER_SIGN_IDENTITY` to the exact certificate names shown by `security find-identity -v`. Create a notary profile with `xcrun notarytool store-credentials CampNotary --apple-id <Apple-ID> --team-id <Team-ID> --password <app-specific-password>`, then set `CAMP_NOTARY_PROFILE=CampNotary`. The script builds and signs `Camp.app`, creates a signed `.pkg`, submits it for notarization, staples the ticket, and verifies the final package. The package installs Camp into `/Applications`; the server stack is built when the user chooses **Install stack** in Camp.
+
+Without those credentials the release script stops before public packaging. Unsigned builds for local development can still be made with `./scripts/bundle-app.sh`. `./scripts/package-installer.sh --local-unsigned` creates an unsigned local `.pkg` preview; it must not be distributed as a public release.
+
+## Install and use
+
+1. Install Xcode Command Line Tools (`xcode-select --install`) and CMake (`brew install cmake`). Camp compiles the server stack from pinned upstream sources on first install, so it needs internet access and several gigabytes of temporary disk space.
+2. Open `dist/Camp.app` and choose **Install stack**.
+3. Approve the macOS administrator prompt. Camp installs binaries under `/opt/camp` and keeps mutable data, configuration, logs, and the web root under `/Library/Application Support/Camp`.
+4. Start Apache, MariaDB, and ProFTPD from their sections or use **Start all**.
+5. The default website is available at `http://127.0.0.1:8080/`; phpMyAdmin is at `/phpmyadmin/`.
+
+Camp stores generated MariaDB and FTP credentials in the login Keychain. The initial credentials are displayed once after bootstrap. The default listeners are loopback only. Enabling all-interface binding exposes services to the local network. Camp uses ports above 1024 and runs its servers as your account; standard privileged ports are disabled in this release.
+
+## Development commands
+
+```sh
+swift build -c debug
+swift build -c release
+```
+
+The `Camp` executable also provides `status`, `bootstrap`, `rewrite`, `start`, `stop`, and `passwords` commands for local diagnostics and scripting.

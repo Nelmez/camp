@@ -1,0 +1,44 @@
+ServerRoot "{{STACK}}"
+ServerName localhost
+PidFile "{{RUN}}/apache.pid"
+Mutex "file:{{TMP}}" default
+
+{{LISTEN}}
+
+{{LOAD_MODULES}}
+
+SSLSessionCache "shmcb:{{RUN}}/apache-ssl-cache(512000)"
+SSLSessionCacheTimeout 300
+
+{{PRIVILEGED_USER}}
+ServerAdmin camp@localhost
+DocumentRoot "{{HTDOCS}}"
+DirectoryIndex index.php index.html
+
+<Directory "{{HTDOCS}}">
+    Options Indexes FollowSymLinks
+    AllowOverride All
+    Require all granted
+</Directory>
+
+<FilesMatch \.php$>
+    SetHandler application/x-httpd-php
+</FilesMatch>
+
+PHPIniDir "{{CONF}}"
+
+ErrorLog "{{LOGS}}/apache-error.log"
+CustomLog "{{LOGS}}/apache-access.log" combined
+
+ScriptAlias /cgi-bin/ "{{HTDOCS}}/cgi-bin/"
+<Directory "{{HTDOCS}}/cgi-bin">
+    Options +ExecCGI
+    Require all granted
+</Directory>
+
+EnableSendfile Off
+EnableMMAP Off
+TraceEnable Off
+TypesConfig "{{STACK}}/conf/mime.types"
+
+{{SSL_VHOST}}

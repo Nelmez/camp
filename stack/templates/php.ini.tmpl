@@ -1,0 +1,19 @@
+[PHP]
+engine = On
+date.timezone = UTC
+memory_limit = 256M
+upload_max_filesize = 64M
+post_max_size = 64M
+display_errors = On
+log_errors = On
+error_log = "{{LOGS}}/php-error.log"
+extension_dir = "{{PHP_EXT_DIR}}"
+mysqli.default_port = {{MARIADB_PORT}}
+mysqli.default_host = 127.0.0.1
+expose_php = Off
+
+{{EXTENSIONS}}
+
+[opcache]
+opcache.enable = 1
+opcache.enable_cli = 0

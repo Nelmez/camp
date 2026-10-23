@@ -1,0 +1,22 @@
+ServerName "Camp"
+ServerType standalone
+DefaultServer on
+Port {{FTP_PORT}}
+DefaultAddress {{BIND}}
+Umask 022
+MaxInstances 10
+RequireValidShell off
+WtmpLog off
+ScoreboardFile "{{RUN}}/proftpd.scoreboard"
+AuthOrder mod_auth_file.c
+AuthUserFile "{{CONF}}/ftpd.passwd"
+AuthGroupFile "{{CONF}}/ftpd.group"
+DefaultRoot ~
+PassivePorts 60000 60050
+{{MASQUERADE}}
+{{FTP_IDENTITY}}
+
+<Limit LOGIN>
+    AllowUser camp
+    DenyAll
+</Limit>

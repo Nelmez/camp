@@ -1,0 +1,15 @@
+[mariadbd]
+datadir = "{{DATA}}"
+port = {{MARIADB_PORT}}
+bind-address = {{BIND}}
+socket = "{{SOCKET}}"
+pid-file = "{{RUN}}/mysql.pid"
+character-set-server = utf8mb4
+collation-server = utf8mb4_unicode_ci
+innodb_buffer_pool_size = 128M
+skip-name-resolve
+
+[client]
+port = {{MARIADB_PORT}}
+socket = "{{SOCKET}}"
+user = root
