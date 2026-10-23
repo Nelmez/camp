@@ -20,6 +20,13 @@ if [[ "$(uname -m)" != "arm64" ]]; then
   exit 1
 fi
 
+command -v swift >/dev/null
+command -v codesign >/dev/null
+command -v pkgbuild >/dev/null
+command -v productbuild >/dev/null
+command -v xcrun >/dev/null
+command -v security >/dev/null
+
 if [[ "$MODE" == "release" ]]; then
   for name in CAMP_APP_SIGN_IDENTITY CAMP_INSTALLER_SIGN_IDENTITY CAMP_NOTARY_PROFILE; do
     if [[ -z "${!name:-}" ]]; then
@@ -27,13 +34,28 @@ if [[ "$MODE" == "release" ]]; then
       exit 2
     fi
   done
+  identities="$(security find-identity -v -p codesigning 2>/dev/null)"
+  app_identity="$(printf '%s\n' "$identities" | grep -F "\"$CAMP_APP_SIGN_IDENTITY\"" || true)"
+  installer_identity="$(printf '%s\n' "$identities" | grep -F "\"$CAMP_INSTALLER_SIGN_IDENTITY\"" || true)"
+  if [[ "$app_identity" != *"Developer ID Application:"* ]]; then
+    echo "CAMP_APP_SIGN_IDENTITY must name a valid Developer ID Application certificate." >&2
+    exit 2
+  fi
+  if [[ "$installer_identity" != *"Developer ID Installer:"* ]]; then
+    echo "CAMP_INSTALLER_SIGN_IDENTITY must name a valid Developer ID Installer certificate." >&2
+    exit 2
+  fi
+  app_team="$(printf '%s\n' "$app_identity" | sed -nE 's/.*\(([A-Z0-9]+)\).*/\1/p')"
+  installer_team="$(printf '%s\n' "$installer_identity" | sed -nE 's/.*\(([A-Z0-9]+)\).*/\1/p')"
+  if [[ -z "$app_team" || "$app_team" != "$installer_team" ]]; then
+    echo "The app and installer certificates must belong to the same Apple Developer team." >&2
+    exit 2
+  fi
+  if ! xcrun notarytool history --keychain-profile "$CAMP_NOTARY_PROFILE" >/dev/null 2>&1; then
+    echo "CAMP_NOTARY_PROFILE is not available in the keychain. Create it with xcrun notarytool store-credentials." >&2
+    exit 2
+  fi
 fi
-
-command -v swift >/dev/null
-command -v codesign >/dev/null
-command -v pkgbuild >/dev/null
-command -v productbuild >/dev/null
-command -v xcrun >/dev/null
 
 APP="$ROOT/dist/Camp.app"
 SUFFIX="arm64"
