@@ -7,12 +7,18 @@ struct ConfigWriter {
         try writeFile(StackLayout.conf.appendingPathComponent("my.cnf"), try TemplateStore.render("my.cnf.tmpl", values))
         try writePHPIni(values: values)
         try writeFile(StackLayout.conf.appendingPathComponent("proftpd.conf"), try TemplateStore.render("proftpd.conf.tmpl", values))
+        try writeApacheConfig(settings: settings)
+        try writeAutostart(settings)
+    }
+
+    func writeApacheConfig(settings: CampSettings) throws {
+        try StackLayout.ensureDataDirectories()
+        let values = try baseValues(settings: settings)
         var httpdValues = values
         httpdValues["LOAD_MODULES"] = loadModules()
         httpdValues["LISTEN"] = listenLines(settings)
         httpdValues["SSL_VHOST"] = sslVhost(settings, values: values)
         try writeFile(StackLayout.conf.appendingPathComponent("httpd.conf"), try TemplateStore.render("httpd.conf.tmpl", httpdValues))
-        try writeAutostart(settings)
     }
 
     func writeWebFiles(databasePassword: String, port: Int, blowfish: String, bindAllInterfaces: Bool) throws {

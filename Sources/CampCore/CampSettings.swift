@@ -24,7 +24,7 @@ struct CampSettings: Codable, Equatable {
     var bindAddress: String { bindAllInterfaces ? "0.0.0.0" : "127.0.0.1" }
 
     func validated() throws -> CampSettings {
-        var copy = self
+        let copy = self
         if copy.usePrivilegedPorts {
             throw StackError.message("Standard ports are unavailable in this release. Use ports above 1024.")
         }
@@ -36,7 +36,7 @@ struct CampSettings: Codable, Equatable {
             throw StackError.message("Each service needs its own port.")
         }
         if !copy.usePrivilegedPorts && (copy.apachePort < 1024 || copy.apacheSSLPort < 1024 || copy.ftpPort < 1024) {
-            throw StackError.message("Turn on standard ports to listen on 80, 443, or 21.")
+            throw StackError.message("Camp only supports ports above 1024 in this release.")
         }
         return copy
     }
@@ -52,6 +52,9 @@ struct CampSettings: Codable, Equatable {
             settings.apacheSSLPort = 8443
             settings.ftpPort = 2121
             settings.save()
+            if StackLayout.installed {
+                try? ConfigWriter().writeApacheConfig(settings: settings)
+            }
         }
         return settings
     }
