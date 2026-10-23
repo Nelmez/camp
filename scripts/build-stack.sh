@@ -27,24 +27,34 @@ if [[ "$ARCH" != "arm64" ]]; then
 fi
 OPENSSL_TARGET="darwin64-arm64-cc"
 
+stack_ready() {
+  [[ -x "$PREFIX/bin/httpd" \
+    && -x "$PREFIX/bin/php" \
+    && -x "$PREFIX/bin/perl" \
+    && ( -x "$PREFIX/sbin/mariadbd" || -x "$PREFIX/bin/mariadbd" ) \
+    && ( -x "$PREFIX/sbin/proftpd" || -x "$PREFIX/bin/proftpd" ) \
+    && -x "$PREFIX/bin/openssl" ]]
+}
+
 export PATH="$PREFIX/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin"
 export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 export CPPFLAGS="-I$PREFIX/include${CPPFLAGS:+ $CPPFLAGS}"
 export LDFLAGS="-L$PREFIX/lib${LDFLAGS:+ $LDFLAGS}"
 export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}"
 
-for tool in curl tar make cmake xcrun; do
-  if ! command -v "$tool" >/dev/null 2>&1; then
-    echo "Camp needs '$tool' to build its server stack. Install Xcode Command Line Tools and CMake, then try again." >&2
+if ! stack_ready; then
+  for tool in curl tar make cmake xcrun; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+      echo "Camp needs '$tool' to build its server stack. Install Xcode Command Line Tools and CMake, then try again." >&2
+      exit 1
+    fi
+  done
+  if ! xcrun --show-sdk-path >/dev/null 2>&1; then
+    echo "Camp could not find the macOS SDK. Install or select Xcode Command Line Tools, then try again." >&2
     exit 1
   fi
-done
-if ! xcrun --show-sdk-path >/dev/null 2>&1; then
-  echo "Camp could not find the macOS SDK. Install or select Xcode Command Line Tools, then try again." >&2
-  exit 1
+  mkdir -p "$CACHE" "$SRC"
 fi
-
-mkdir -p "$CACHE" "$SRC"
 trap 'echo "Build failed near line $LINENO" >&2' ERR
 
 fix_icu_install_names() {
@@ -70,6 +80,17 @@ fix_icu_install_names() {
 
 ensure_dirs() {
   mkdir -p "$DATA/htdocs/cgi-bin" "$DATA/conf" "$DATA/logs" "$DATA/data/mysql" "$DATA/ftp" "$DATA/tmp" "$DATA/run" 2>/dev/null || true
+  if stack_ready; then
+    if [[ -w "$DATA" ]]; then
+      mkdir -p "$DATA/htdocs/cgi-bin" "$DATA/conf" "$DATA/logs" "$DATA/data/mysql" "$DATA/ftp" "$DATA/tmp" "$DATA/run"
+    else
+      local data_cmd
+      data_cmd="mkdir -p '$DATA/htdocs/cgi-bin' '$DATA/conf' '$DATA/logs' '$DATA/data/mysql' '$DATA/ftp' '$DATA/tmp' '$DATA/run' && chown -R '$USER:$(id -gn)' '$DATA' && chmod 755 '$DATA'"
+      if sudo -n true 2>/dev/null; then sudo bash -c "$data_cmd"; else osascript -e "do shell script \"$data_cmd\" with administrator privileges"; fi
+    fi
+    ln -sfn "$PREFIX" "$DATA/stack"
+    return
+  fi
   if [[ -w "$PREFIX" && -w "$DATA" ]]; then
     mkdir -p "$PREFIX" "$DATA/htdocs/cgi-bin" "$DATA/conf" "$DATA/logs" "$DATA/data/mysql" "$DATA/ftp" "$DATA/tmp" "$DATA/run"
     ln -sfn "$PREFIX" "$DATA/stack"
@@ -109,6 +130,44 @@ unpack() {
   tar -xf "$CACHE/$archive" -C "$SRC"
   printf '%s\n' "$top"
 }
+
+install_phpmyadmin() {
+  [[ -f "$DATA/htdocs/phpmyadmin/index.php" ]] && return
+  local archive="$CACHE/phpmyadmin-${PHPMYADMIN_VERSION}.tar.xz"
+  local bundled="$ROOT/stack/phpmyadmin.tar.xz"
+  if [[ -f "$bundled" ]]; then
+    archive="$bundled"
+  else
+    mkdir -p "$CACHE"
+    fetch "https://files.phpmyadmin.net/phpMyAdmin/${PHPMYADMIN_VERSION}/phpMyAdmin-${PHPMYADMIN_VERSION}-all-languages.tar.xz" "phpmyadmin-${PHPMYADMIN_VERSION}.tar.xz"
+  fi
+  local unpack_dir="$DATA/tmp/phpmyadmin-unpack"
+  local inner
+  mkdir -p "$unpack_dir" "$DATA/htdocs/phpmyadmin"
+  tar -xJf "$archive" -C "$unpack_dir"
+  inner="$(find "$unpack_dir" -mindepth 1 -maxdepth 1 -type d | head -1)"
+  [[ -n "$inner" ]] || { echo "phpMyAdmin archive was empty." >&2; return 1; }
+  ditto "$inner" "$DATA/htdocs/phpmyadmin"
+  rm -rf "$DATA/htdocs/phpmyadmin/setup" "$unpack_dir"
+}
+
+if stack_ready; then
+  ensure_dirs
+  mkdir -p "$CACHE"
+  install_phpmyadmin
+  cat > "$DATA/conf/stack-manifest.txt" << EOF
+httpd ${HTTPD_VERSION}
+php ${PHP_VERSION}
+mariadb ${MARIADB_VERSION}
+perl ${PERL_VERSION}
+proftpd ${PROFTPD_VERSION}
+phpmyadmin ${PHPMYADMIN_VERSION}
+openssl ${OPENSSL_VERSION}
+prefix ${PREFIX}
+EOF
+  echo "Camp's prebuilt server stack is ready at $PREFIX"
+  exit 0
+fi
 
 cmake_install() {
   local source="$1"
@@ -364,15 +423,7 @@ if [[ ! -x "$PREFIX/sbin/proftpd" && ! -x "$PREFIX/bin/proftpd" ]]; then
   popd >/dev/null
 fi
 
-if [[ ! -f "$DATA/htdocs/phpmyadmin/index.php" ]]; then
-  fetch "https://files.phpmyadmin.net/phpMyAdmin/${PHPMYADMIN_VERSION}/phpMyAdmin-${PHPMYADMIN_VERSION}-all-languages.tar.xz" "phpmyadmin-${PHPMYADMIN_VERSION}.tar.xz"
-  rm -rf "$SRC/phpmyadmin-unpack" "$DATA/htdocs/phpmyadmin"
-  mkdir -p "$SRC/phpmyadmin-unpack"
-  tar -xJf "$CACHE/phpmyadmin-${PHPMYADMIN_VERSION}.tar.xz" -C "$SRC/phpmyadmin-unpack"
-  inner="$(find "$SRC/phpmyadmin-unpack" -mindepth 1 -maxdepth 1 -type d | head -1)"
-  mv "$inner" "$DATA/htdocs/phpmyadmin"
-  rm -rf "$DATA/htdocs/phpmyadmin/setup"
-fi
+install_phpmyadmin
 
 ln -sfn "$PREFIX" "$DATA/stack"
 cat > "$DATA/conf/stack-manifest.txt" << EOF

@@ -3,7 +3,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
 VERSION="$(tr -d '\r\n' < "$ROOT/VERSION")"
+# shellcheck disable=SC1091
+source "$ROOT/stack/versions.env"
 MODE="release"
 if [[ "${1:-}" == "--local-unsigned" ]]; then
   MODE="local-unsigned"
@@ -41,8 +44,22 @@ export CAMP_BUILD_DIR="${CAMP_BUILD_DIR:-$ROOT/.build-release}"
 PKG_WORK="$(mktemp -d "${TMPDIR:-/tmp}/camp-package.XXXXXX")"
 trap 'rm -rf "$PKG_WORK"' EXIT
 
+"$ROOT/scripts/build-stack.sh"
+
 swift build --scratch-path "$CAMP_BUILD_DIR" -c release --arch arm64
 "$ROOT/scripts/bundle-app.sh"
+"$ROOT/scripts/stage-third-party-licenses.sh" \
+  "$APP/Contents/Resources/THIRD_PARTY_LICENSES"
+
+PMA_ARCHIVE="$ROOT/build/cache/phpmyadmin-${PHPMYADMIN_VERSION}.tar.xz"
+if [[ ! -f "$PMA_ARCHIVE" ]]; then
+  mkdir -p "$(dirname "$PMA_ARCHIVE")"
+  curl -fL --retry 5 --retry-delay 2 \
+    -o "$PMA_ARCHIVE.partial" \
+    "https://files.phpmyadmin.net/phpMyAdmin/${PHPMYADMIN_VERSION}/phpMyAdmin-${PHPMYADMIN_VERSION}-all-languages.tar.xz"
+  mv "$PMA_ARCHIVE.partial" "$PMA_ARCHIVE"
+fi
+cp "$PMA_ARCHIVE" "$APP/Contents/Resources/Camp/stack/phpmyadmin.tar.xz"
 
 for binary in "$APP_BIN"; do
   [[ "$(file -b "$binary")" == *"arm64"* ]] || {
@@ -62,6 +79,30 @@ fi
 rm -f "$PKG"
 mkdir -p "$PKG_WORK/root/Applications"
 ditto "$APP" "$PKG_WORK/root/Applications/Camp.app"
+mkdir -p "$PKG_WORK/root/opt/camp"
+for component in bin sbin lib libexec modules share conf etc htdocs icons error cgi-bin php scripts support-files; do
+  if [[ -e "/opt/camp/$component" ]]; then
+    ditto "/opt/camp/$component" "$PKG_WORK/root/opt/camp/$component"
+  fi
+done
+find "$PKG_WORK/root/opt/camp" -depth \( -name '._*' -o -name '.DS_Store' \) -exec rm -rf {} +
+
+while IFS= read -r binary; do
+  description="$(file -b "$binary")"
+  case "$description" in
+    *Mach-O*)
+      [[ "$description" == *arm64* ]] || {
+        echo "Non-arm64 code found in the runtime payload: $binary ($description)" >&2
+        exit 1
+      }
+      if [[ "$MODE" == "release" ]]; then
+        codesign --force --timestamp --options runtime --sign "$CAMP_APP_SIGN_IDENTITY" "$binary"
+        codesign --verify --strict --verbose=2 "$binary"
+      fi
+      ;;
+  esac
+done < <(find "$PKG_WORK/root/opt/camp" -type f -print)
+
 COMPONENT_PKG="$PKG_WORK/Camp-component.pkg"
 pkgbuild \
   --root "$PKG_WORK/root" \

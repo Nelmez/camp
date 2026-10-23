@@ -21,4 +21,30 @@ launchctl disable system/com.nelmez.camp.helper >/dev/null 2>&1 || true
 rm -f /Library/LaunchDaemons/com.nelmez.camp.helper.plist
 rm -f /Library/PrivilegedHelperTools/com.nelmez.camp.helper
 rm -f "/Library/Application Support/Camp/run/helper.sock"
+
+DATA="/Library/Application Support/Camp"
+APP="/Applications/Camp.app"
+uid="$(stat -f '%u' /dev/console)"
+user="$(id -nu "$uid")"
+group="$(id -gn "$user")"
+for directory in \
+  "$DATA/htdocs/cgi-bin" "$DATA/conf" "$DATA/logs" "$DATA/data/mysql" \
+  "$DATA/ftp" "$DATA/tmp" "$DATA/run"; do
+  install -d -o "$user" -g "$group" -m 755 "$directory"
+done
+
+if [[ ! -f "$DATA/htdocs/phpmyadmin/index.php" ]]; then
+  archive="$APP/Contents/Resources/Camp/stack/phpmyadmin.tar.xz"
+  unpack_dir="$DATA/tmp/phpmyadmin-unpack"
+  if [[ -f "$archive" ]]; then
+    mkdir -p "$unpack_dir" "$DATA/htdocs/phpmyadmin"
+    tar -xJf "$archive" -C "$unpack_dir"
+    inner="$(find "$unpack_dir" -mindepth 1 -maxdepth 1 -type d | head -1)"
+    [[ -n "$inner" ]] || { echo "Camp installer: phpMyAdmin archive is empty." >&2; exit 1; }
+    ditto "$inner" "$DATA/htdocs/phpmyadmin"
+    rm -rf "$DATA/htdocs/phpmyadmin/setup" "$unpack_dir"
+    chown -R "$user:$group" "$DATA/htdocs/phpmyadmin"
+  fi
+fi
+ln -sfn /opt/camp "$DATA/stack"
 exit 0
