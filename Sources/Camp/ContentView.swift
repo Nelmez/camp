@@ -190,7 +190,7 @@ struct FTPView: View {
             LabeledContent("User", value: "camp")
             LabeledContent("Folder", value: StackLayout.ftp.path)
             LabeledContent("Password") {
-                Text(model.revealedFTP ? model.ftpPassword : String(repeating: "•", count: 8))
+                Text(model.revealedFTP ? model.ftpPassword : String(repeating: "•", count: 32))
                     .font(.system(.body, design: .monospaced))
                     .textSelection(.enabled)
             }
@@ -233,6 +233,9 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Toggle("Listen on all interfaces", isOn: $model.settings.bindAllInterfaces)
+            Text("FTP stays on this Mac because this build does not support encrypted FTP connections.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
             Toggle("Launch at login", isOn: $model.settings.launchAtLogin)
             Toggle("Standard ports (80, 443, 21)", isOn: $model.settings.usePrivilegedPorts)
                 .disabled(true)

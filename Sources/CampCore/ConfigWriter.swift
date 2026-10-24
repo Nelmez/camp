@@ -84,6 +84,9 @@ struct ConfigWriter {
             "RUN": StackLayout.run.path,
             "SOCKET": StackLayout.mysqlSocket.path,
             "BIND": settings.bindAddress,
+            // This build has no FTPS module, so keep FTP local even when the
+            // web servers are exposed to the LAN.
+            "FTP_BIND": "127.0.0.1",
             "MARIADB_PORT": String(settings.mariadbPort),
             "FTP_PORT": String(settings.ftpPort),
             "PRIVILEGED_USER": privileged,

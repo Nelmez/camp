@@ -42,11 +42,15 @@ struct ServiceController {
         let domain = "gui/\(getuid())"
         let target = "\(domain)/\(service.label)"
         let printed = Shell.run(executable: "/bin/launchctl", arguments: ["print", target])
-        if printed.status != 0 {
-            let boot = Shell.run(executable: "/bin/launchctl", arguments: ["bootstrap", domain, plist.path])
-            if boot.status != 0 {
-                throw StackError.command("launchctl bootstrap \(service.title)", boot.combined)
+        if printed.status == 0 {
+            let unload = Shell.run(executable: "/bin/launchctl", arguments: ["bootout", domain, plist.path])
+            if unload.status != 0 {
+                throw StackError.command("launchctl reload \(service.title)", unload.combined)
             }
+        }
+        let boot = Shell.run(executable: "/bin/launchctl", arguments: ["bootstrap", domain, plist.path])
+        if boot.status != 0 {
+            throw StackError.command("launchctl bootstrap \(service.title)", boot.combined)
         }
         let kick = Shell.run(executable: "/bin/launchctl", arguments: ["kickstart", "-k", target])
         if kick.status != 0 {
@@ -60,7 +64,11 @@ struct ServiceController {
     private func stopLaunchd(_ service: CampService) {
         let target = "gui/\(getuid())/\(service.label)"
         _ = Shell.run(executable: "/bin/launchctl", arguments: ["kill", "SIGTERM", target])
-        Thread.sleep(forTimeInterval: 0.4)
+        let timeout: TimeInterval = service == .mariadb ? 30 : 10
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline && launchdStatus(service.label) == .running {
+            Thread.sleep(forTimeInterval: 0.25)
+        }
         if launchdStatus(service.label) == .running {
             _ = Shell.run(executable: "/bin/launchctl", arguments: ["kill", "SIGKILL", target])
         }

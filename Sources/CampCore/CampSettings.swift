@@ -35,7 +35,7 @@ struct CampSettings: Codable, Equatable {
         if Set(ports).count != ports.count {
             throw StackError.message("Each service needs its own port.")
         }
-        if !copy.usePrivilegedPorts && (copy.apachePort < 1024 || copy.apacheSSLPort < 1024 || copy.ftpPort < 1024) {
+        if !copy.usePrivilegedPorts && ports.contains(where: { $0 < 1024 }) {
             throw StackError.message("Camp only supports ports above 1024 in this release.")
         }
         return copy

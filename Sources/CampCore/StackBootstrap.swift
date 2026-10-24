@@ -24,7 +24,7 @@ struct StackBootstrap {
         if services.status(.mariadb, settings: settings) != .running {
             try services.start(.mariadb, settings: settings)
         }
-        try waitForSocket()
+        try waitForDatabase(port: settings.mariadbPort)
         var report = BootstrapReport()
         report.databasePassword = try ensureDatabasePassword(port: settings.mariadbPort)
         let blowfish = try ensureBlowfish()
@@ -65,13 +65,17 @@ struct StackBootstrap {
         }
     }
 
-    private func waitForSocket() throws {
+    private func waitForDatabase(port: Int) throws {
         let deadline = Date().addingTimeInterval(40)
+        let existingPassword = KeychainStore.get(account: KeychainStore.databaseAccount)
         while Date() < deadline {
-            if FileManager.default.fileExists(atPath: StackLayout.mysqlSocket.path) { return }
-            Thread.sleep(forTimeInterval: 0.25)
+            if connect(port: port, password: nil)
+                || (existingPassword != nil && connect(port: port, password: existingPassword)) {
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.5)
         }
-        throw StackError.message("MariaDB did not create its socket.\n\(ServiceController().tail(LogKind.mariadb.file))")
+        throw StackError.message("MariaDB did not become ready.\n\(ServiceController().tail(LogKind.mariadb.file))")
     }
 
     private func ensureDatabasePassword(port: Int) throws -> String? {
@@ -79,7 +83,7 @@ struct StackBootstrap {
            connect(port: port, password: existing) {
             return nil
         }
-        let fresh = Secrets.password(length: 20)
+        let fresh = try Secrets.password(length: 20)
         if connect(port: port, password: nil) {
             try grant(port: port, password: fresh, current: nil)
         } else if let existing = KeychainStore.get(account: KeychainStore.databaseAccount),
@@ -146,22 +150,24 @@ struct StackBootstrap {
 
     private func ensureBlowfish() throws -> String {
         if let existing = KeychainStore.get(account: KeychainStore.blowfishAccount) { return existing }
-        let secret = Secrets.password(length: 32)
+        let secret = try Secrets.password(length: 32)
         try KeychainStore.set(account: KeychainStore.blowfishAccount, password: secret)
         return secret
     }
 
     private func ensureFTPAccount() throws -> String? {
         let existing = KeychainStore.get(account: KeychainStore.ftpAccount)
-        let password = existing ?? Secrets.password(length: 8)
+        let password: String
+        if let existing {
+            password = existing
+        } else {
+            password = try Secrets.password(length: 32)
+        }
         let passwd = StackLayout.conf.appendingPathComponent("ftpd.passwd")
         let group = StackLayout.conf.appendingPathComponent("ftpd.group")
-        if existing != nil && FileManager.default.fileExists(atPath: passwd.path) {
-            return nil
-        }
         let uid = getuid()
         let gid = getgid()
-        let hash = Secrets.cryptHash(password: password)
+        let hash = try ftpPasswordHash(password)
         let userLine = "camp:\(hash):\(uid):\(gid):Camp:\(StackLayout.ftp.path):/usr/bin/false\n"
         let groupLine = "camp:x:\(gid):camp\n"
         try userLine.write(to: passwd, atomically: true, encoding: .utf8)
@@ -173,6 +179,27 @@ struct StackBootstrap {
             return password
         }
         return nil
+    }
+
+    private func ftpPasswordHash(_ password: String) throws -> String {
+        guard let htpasswd = StackLayout.binary(["bin/htpasswd"]) else {
+            throw StackError.message("Apache htpasswd is missing; Camp cannot create a secure FTP password hash.")
+        }
+        let result = Shell.run(
+            executable: htpasswd.path,
+            arguments: ["-n", "-B", "-i", "-C", "12", "camp"],
+            stdin: password + "\n"
+        )
+        guard result.status == 0,
+              let separator = result.stdout.firstIndex(of: ":") else {
+            throw StackError.command("htpasswd bcrypt", result.combined)
+        }
+        let hash = String(result.stdout[result.stdout.index(after: separator)...])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard hash.hasPrefix("$2y$12$"), hash.utf8.count == 60 else {
+            throw StackError.message("Apache htpasswd returned an unsupported FTP password hash.")
+        }
+        return hash
     }
 
     private func ensureCertificate() throws {

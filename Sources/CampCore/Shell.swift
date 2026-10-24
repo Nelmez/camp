@@ -125,20 +125,24 @@ enum KeychainStore {
 }
 
 enum Secrets {
-    static func password(length: Int) -> String {
+    static func password(length: Int) throws -> String {
         let alphabet = Array("ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789")
-        var bytes = [UInt8](repeating: 0, count: length)
-        let status = SecRandomCopyBytes(kSecRandomDefault, length, &bytes)
-        if status != errSecSuccess {
-            return String((0..<length).map { _ in alphabet.randomElement()! })
+        guard length > 0 else { return "" }
+        let usableByteLimit = 256 - (256 % alphabet.count)
+        var result = [Character]()
+        result.reserveCapacity(length)
+        while result.count < length {
+            let needed = length - result.count
+            var bytes = [UInt8](repeating: 0, count: max(16, needed * 2))
+            let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+            guard status == errSecSuccess else {
+                throw StackError.message("macOS could not provide secure random bytes for a Camp credential (\(status)).")
+            }
+            for byte in bytes where Int(byte) < usableByteLimit {
+                result.append(alphabet[Int(byte) % alphabet.count])
+                if result.count == length { break }
+            }
         }
-        return String(bytes.map { alphabet[Int($0) % alphabet.count] })
-    }
-
-    static func cryptHash(password: String) -> String {
-        let alphabet = Array("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789./")
-        let salt = String((0..<2).map { _ in alphabet.randomElement()! })
-        guard let hashed = crypt(password, salt) else { return salt }
-        return String(cString: hashed)
+        return String(result)
     }
 }

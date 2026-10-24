@@ -171,7 +171,7 @@ final class CampModel: ObservableObject {
             try await Task.detached { try ConfigWriter().write(settings: draft) }.value
             if FileManager.default.fileExists(atPath: StackLayout.marker.path) {
                 let password = KeychainStore.get(account: KeychainStore.databaseAccount) ?? ""
-                let blowfish = KeychainStore.get(account: KeychainStore.blowfishAccount) ?? Secrets.password(length: 32)
+                let blowfish = try KeychainStore.get(account: KeychainStore.blowfishAccount) ?? Secrets.password(length: 32)
                 try await Task.detached {
                     try ConfigWriter().writeWebFiles(
                         databasePassword: password,

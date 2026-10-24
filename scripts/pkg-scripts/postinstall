@@ -25,7 +25,26 @@ rm -f "/Library/Application Support/Camp/run/helper.sock"
 DATA="/Library/Application Support/Camp"
 APP="/Applications/Camp.app"
 uid="$(stat -f '%u' /dev/console)"
-user="$(id -nu "$uid")"
+user="$(id -nu "$uid" 2>/dev/null || true)"
+if [[ -z "$user" || "$uid" -lt 501 || "$user" == loginwindow ]]; then
+  # Package installs may run from MDM before anyone is logged in. Resolve a
+  # real local account with a home directory instead of silently making the
+  # writable Camp data tree belong to root.
+  account=""
+  while read -r candidate_uid candidate; do
+    candidate_home="$(dscl . -read "/Users/$candidate" NFSHomeDirectory 2>/dev/null | awk -F': ' '{ print $2 }')"
+    if [[ -n "$candidate_home" && -d "$candidate_home" ]]; then
+      account="$candidate"
+      break
+    fi
+  done < <(dscl . -list /Users UniqueID | awk '$2 >= 501 && $2 < 60000 { print $2 " " $1 }' | sort -n)
+  if [[ -z "$account" ]]; then
+    echo "Camp installer: no local user account is available to own Camp's data. Create a user account, then install Camp again." >&2
+    exit 1
+  fi
+  uid="$(id -u "$account")"
+  user="$account"
+fi
 group="$(id -gn "$user")"
 for directory in \
   "$DATA/htdocs/cgi-bin" "$DATA/conf" "$DATA/logs" "$DATA/data/mysql" \

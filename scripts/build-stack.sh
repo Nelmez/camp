@@ -26,6 +26,7 @@ if [[ "$ARCH" != "arm64" ]]; then
   exit 1
 fi
 OPENSSL_TARGET="darwin64-arm64-cc"
+PROFTPD_PATCH_MARKER="$PREFIX/share/camp/proftpd-auth-file-bcrypt-v1"
 
 stack_ready() {
   [[ -x "$PREFIX/bin/httpd" \
@@ -42,7 +43,7 @@ export CPPFLAGS="-I$PREFIX/include${CPPFLAGS:+ $CPPFLAGS}"
 export LDFLAGS="-L$PREFIX/lib${LDFLAGS:+ $LDFLAGS}"
 export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}"
 
-if ! stack_ready; then
+if ! stack_ready || [[ ! -f "$PROFTPD_PATCH_MARKER" ]]; then
   for tool in curl tar make cmake xcrun; do
     if ! command -v "$tool" >/dev/null 2>&1; then
       echo "Camp needs '$tool' to build its server stack. Install Xcode Command Line Tools and CMake, then try again." >&2
@@ -151,7 +152,7 @@ install_phpmyadmin() {
   rm -rf "$DATA/htdocs/phpmyadmin/setup" "$unpack_dir"
 }
 
-if stack_ready; then
+if stack_ready && [[ -f "$PROFTPD_PATCH_MARKER" ]]; then
   ensure_dirs
   mkdir -p "$CACHE"
   install_phpmyadmin
@@ -406,11 +407,12 @@ if [[ ! -x "$PREFIX/sbin/mariadbd" && ! -x "$PREFIX/bin/mariadbd" ]]; then
   )
 fi
 
-if [[ ! -x "$PREFIX/sbin/proftpd" && ! -x "$PREFIX/bin/proftpd" ]]; then
+if [[ ! -x "$PREFIX/sbin/proftpd" && ! -x "$PREFIX/bin/proftpd" ]] || [[ ! -f "$PROFTPD_PATCH_MARKER" ]]; then
   fetch "https://github.com/proftpd/proftpd/archive/refs/tags/v${PROFTPD_VERSION}.tar.gz" "proftpd-${PROFTPD_VERSION}.tar.gz"
   rm -rf "$SRC/proftpd-${PROFTPD_VERSION}"
   dir="$(unpack "proftpd-${PROFTPD_VERSION}.tar.gz")"
   pushd "$SRC/$dir" >/dev/null
+  patch -p1 < "$ROOT/patches/proftpd-auth-file-bcrypt.patch"
   ./configure \
     --prefix="$PREFIX" \
     --sysconfdir="$PREFIX/etc" \
@@ -421,6 +423,8 @@ if [[ ! -x "$PREFIX/sbin/proftpd" && ! -x "$PREFIX/bin/proftpd" ]]; then
   make -j "$JOBS"
   make INSTALL_USER="$(id -un)" INSTALL_GROUP="$(id -gn)" install
   popd >/dev/null
+  mkdir -p "$(dirname "$PROFTPD_PATCH_MARKER")"
+  touch "$PROFTPD_PATCH_MARKER"
 fi
 
 install_phpmyadmin

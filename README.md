@@ -35,7 +35,7 @@ The appcast is served as the `appcast.xml` asset on GitHub's latest stable relea
 3. Camp keeps mutable data, configuration, logs, and the web root under `/Library/Application Support/Camp`.
 4. The default website is available at `http://127.0.0.1:8080/`; phpMyAdmin is at `/phpmyadmin/`.
 
-Camp stores generated MariaDB and FTP credentials in the login Keychain. The initial credentials are displayed once after bootstrap. The default listeners are loopback only. Enabling all-interface binding exposes services to the local network. Camp uses ports above 1024 and runs its servers as your account; standard privileged ports are disabled in this release.
+Camp stores generated MariaDB and FTP credentials in the login Keychain. The initial credentials are displayed once after bootstrap. The default listeners are loopback only. Enabling all-interface binding exposes Apache and MariaDB to the local network; FTP remains on loopback because this build does not support encrypted FTP. Camp uses ports above 1024 and runs its servers as your account; standard privileged ports are disabled in this release.
 
 ## Development commands
 
