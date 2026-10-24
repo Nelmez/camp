@@ -125,8 +125,13 @@ struct ConfigWriter {
             .filter { $0.trimmingCharacters(in: .whitespaces).hasPrefix("LoadModule ") } ?? []
 
         let moduleDirectory = StackLayout.resolvedPrefix.appendingPathComponent("modules")
+        let cgi = moduleDirectory.appendingPathComponent("mod_cgi.so")
         let sslCache = moduleDirectory.appendingPathComponent("mod_socache_shmcb.so")
         let ssl = moduleDirectory.appendingPathComponent("mod_ssl.so")
+        if FileManager.default.fileExists(atPath: cgi.path),
+           !modules.contains(where: { $0.contains("cgi_module") }) {
+            modules.append("LoadModule cgi_module modules/mod_cgi.so")
+        }
         if FileManager.default.fileExists(atPath: sslCache.path),
            !modules.contains(where: { $0.contains("socache_shmcb_module") }) {
             modules.append("LoadModule socache_shmcb_module modules/mod_socache_shmcb.so")
