@@ -8,7 +8,7 @@ swift build --scratch-path "$BUILD_DIR" -c release
 BIN_DIR="$(swift build --scratch-path "$BUILD_DIR" -c release --show-bin-path)"
 APP="$ROOT/dist/Camp.app"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/templates" "$APP/Contents/Resources/Camp/stack" "$APP/Contents/Resources/Camp/scripts"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$APP/Contents/Resources/templates" "$APP/Contents/Resources/Camp/stack" "$APP/Contents/Resources/Camp/scripts"
 ICONSET="$BUILD_DIR/Camp.iconset"
 mkdir -p "$ICONSET"
 swift "$ROOT/scripts/draw-icon.swift" "$BUILD_DIR/Camp-icon-1024.png"
@@ -19,6 +19,13 @@ for size in 16 32 128 256 512; do
 done
 iconutil -c icns "$ICONSET" -o "$BUILD_DIR/Camp.icns"
 cp "$BIN_DIR/Camp" "$APP/Contents/MacOS/Camp"
+SPARKLE_FRAMEWORK="$(find "$BUILD_DIR/artifacts" -type d -name Sparkle.framework -print -quit 2>/dev/null || true)"
+if [[ -z "$SPARKLE_FRAMEWORK" ]]; then
+  echo "Sparkle.framework is missing. Run 'swift package resolve' first." >&2
+  exit 1
+fi
+ditto "$SPARKLE_FRAMEWORK" "$APP/Contents/Frameworks/Sparkle.framework"
+install_name_tool -add_rpath '@executable_path/../Frameworks' "$APP/Contents/MacOS/Camp"
 cp "$BUILD_DIR/Camp.icns" "$APP/Contents/Resources/Camp.icns"
 cp "$ROOT/stack/templates/"* "$APP/Contents/Resources/templates/"
 cp "$ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
@@ -59,6 +66,18 @@ cat > "$APP/Contents/Info.plist" << 'EOF'
   <true/>
   <key>NSPrincipalClass</key>
   <string>NSApplication</string>
+  <key>SUFeedURL</key>
+  <string>https://github.com/Nelmez/Camp/releases/latest/download/appcast.xml</string>
+  <key>SUPublicEDKey</key>
+  <string>+DTO9oD1Ti5InXnOcupJEe76dC+A17fT9JIsPppm5a0=</string>
+  <key>SUEnableAutomaticChecks</key>
+  <true/>
+  <key>SUAutomaticallyUpdate</key>
+  <false/>
+  <key>SURequireSignedFeed</key>
+  <true/>
+  <key>SUVerifyUpdateBeforeExtraction</key>
+  <true/>
 </dict>
 </plist>
 EOF

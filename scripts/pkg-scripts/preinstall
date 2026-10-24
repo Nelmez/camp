@@ -1,0 +1,49 @@
+#!/bin/bash
+set -euo pipefail
+
+CONSOLE_USER="$(/usr/bin/stat -f '%Su' /dev/console 2>/dev/null || true)"
+if [[ -z "$CONSOLE_USER" || "$CONSOLE_USER" == "root" || "$CONSOLE_USER" == "loginwindow" ]]; then
+  exit 0
+fi
+CONSOLE_UID="$(/usr/bin/id -u "$CONSOLE_USER")"
+STATE="/private/var/tmp/camp-update-services-${CONSOLE_UID}"
+DOMAIN="gui/${CONSOLE_UID}"
+SERVICES=(apache mariadb proftpd)
+
+/bin/rm -f "$STATE"
+/usr/bin/touch "$STATE"
+/usr/sbin/chown root:wheel "$STATE"
+/bin/chmod 600 "$STATE"
+
+for service in "${SERVICES[@]}"; do
+  label="com.nelmez.camp.${service}"
+  target="${DOMAIN}/${label}"
+  service_state="$(/bin/launchctl print "$target" 2>/dev/null || true)"
+  if [[ "$service_state" == *"state = running"* ]]; then
+    printf '%s\n' "$service" >> "$STATE"
+    /bin/launchctl asuser "$CONSOLE_UID" /bin/launchctl kill SIGTERM "$target" >/dev/null 2>&1 || true
+  fi
+done
+
+for _ in {1..30}; do
+  still_running=0
+  for service in "${SERVICES[@]}"; do
+    if /usr/bin/grep -qx "$service" "$STATE"; then
+      target="${DOMAIN}/com.nelmez.camp.${service}"
+      service_state="$(/bin/launchctl print "$target" 2>/dev/null || true)"
+      if [[ "$service_state" == *"state = running"* ]]; then
+        still_running=1
+      fi
+    fi
+  done
+  [[ "$still_running" == 1 ]] || break
+  /bin/sleep 1
+done
+
+for service in "${SERVICES[@]}"; do
+  if /usr/bin/grep -qx "$service" "$STATE"; then
+    target="${DOMAIN}/com.nelmez.camp.${service}"
+    /bin/launchctl asuser "$CONSOLE_UID" /bin/launchctl kill SIGKILL "$target" >/dev/null 2>&1 || true
+  fi
+done
+exit 0

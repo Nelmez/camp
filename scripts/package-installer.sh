@@ -125,6 +125,8 @@ for binary in "$APP_BIN"; do
 done
 
 if [[ "$MODE" == "release" ]]; then
+  codesign --force --deep --timestamp --options runtime --sign "$CAMP_APP_SIGN_IDENTITY" \
+    "$APP/Contents/Frameworks/Sparkle.framework"
   for binary in "$APP_BIN"; do
     codesign --force --timestamp --options runtime --sign "$CAMP_APP_SIGN_IDENTITY" "$binary"
   done

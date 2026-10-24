@@ -300,6 +300,7 @@ struct MenuBarView: View {
         Button("Start all") { model.startAll() }
         Button("Stop all") { model.stopAll() }
         Button("Open site") { model.openSite() }
+        Button("Check for Updates…") { CampUpdater.shared.checkForUpdates() }
         Divider()
         Button("Quit Camp") { NSApp.terminate(nil) }
     }

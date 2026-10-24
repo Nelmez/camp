@@ -47,4 +47,18 @@ if [[ ! -f "$DATA/htdocs/phpmyadmin/index.php" ]]; then
   fi
 fi
 ln -sfn /opt/camp "$DATA/stack"
+
+# Resume only Camp services that were running before the package update.
+STATE="/private/var/tmp/camp-update-services-${uid}"
+if [[ -f "$STATE" ]]; then
+  while IFS= read -r service; do
+    case "$service" in
+      apache|mariadb|proftpd)
+        launchctl asuser "$uid" /bin/launchctl kickstart -k "gui/${uid}/com.nelmez.camp.${service}" \
+          >/dev/null 2>&1 || true
+        ;;
+    esac
+  done < "$STATE"
+  rm -f "$STATE"
+fi
 exit 0
