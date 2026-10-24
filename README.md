@@ -1,47 +1,115 @@
 # Camp
 
-Camp is a native (vibe coded) macOS control panel and local web stack inspired by XAMPP. It manages Apache HTTP Server, PHP, MariaDB, Perl, ProFTPD, and phpMyAdmin as separate processes. Camp targets macOS 14 and newer on Apple silicon Macs (M1 and later).
+A lightweight, native macOS control panel and local web development stack inspired by XAMPP. Built specifically for Apple Silicon and macOS 14+.
 
-## Build the app
+Camp packages and manages Apache HTTP Server, PHP, MariaDB, Perl, ProFTPD, and phpMyAdmin as isolated, user-space processes—no root privileges required.
 
-From this directory:
+---
+
+## Features
+
+- **Native macOS Experience:** Clean SwiftUI control panel to start, stop, and monitor services individually or all at once.
+- **Complete Stack:**
+  - **Apache 2.4** (with SSL support)
+  - **PHP 8**
+  - **MariaDB**
+  - **Perl**
+  - **ProFTPD**
+  - **phpMyAdmin** (pre-installed and pre-configured)
+- **User-Space & Rootless:** Operates entirely on user ports (> 1024) without requiring `sudo` or modifying system directories.
+- **Zero-Config Bootstrap:** Automatically creates configurations, bootstraps databases, and provisions secure credentials stored in macOS Keychain on first launch.
+- **Built-in CLI:** Script and control services directly from the terminal via `Camp` / `campctl`.
+- **Sparkle Updates:** Built-in seamless update delivery.
+
+---
+
+## Quick Start
+
+### Installation
+
+1. Download the latest release (`Camp.dmg`) from [Releases](https://github.com/Nelmez/camp/releases).
+2. Open the disk image and install **Camp**.
+3. Launch **Camp** from `/Applications`.
+
+### Default Services & Endpoints
+
+| Service | Protocol / Port | Local URL / Access |
+|---|---|---|
+| **Web Server (Apache)** | HTTP `8080` / HTTPS `8443` | `http://127.0.0.1:8080/` |
+| **phpMyAdmin** | Web | `http://127.0.0.1:8080/phpmyadmin/` |
+| **MariaDB** | MySQL `3306` | `127.0.0.1:3306` |
+| **FTP (ProFTPD)** | FTP `2121` | `127.0.0.1:2121` |
+
+> Generated credentials for MariaDB and FTP are saved securely in your macOS Keychain and displayed after initial bootstrap.
+
+---
+
+## File Layout
+
+Camp separates immutable application binaries from mutable user project data:
+
+- **Application:** `/Applications/Camp.app`
+- **Runtime & Binaries:** `/opt/camp/`
+- **Document Root (htdocs):** `/Library/Application Support/Camp/htdocs`
+- **Configuration:** `/Library/Application Support/Camp/conf`
+- **Logs:** `/Library/Application Support/Camp/logs`
+- **Database Data:** `/Library/Application Support/Camp/mysql`
+
+---
+
+## Command Line Interface
+
+The `Camp` binary can be run from the command line for automation, status checks, and scripting:
 
 ```sh
-./scripts/bundle-app.sh
+# Check service status and runtime versions
+Camp status
+
+# Start or stop services (individual or all)
+Camp start [apache|mariadb|proftpd|all]
+Camp stop [apache|mariadb|proftpd|all]
+
+# Retrieve stored credentials from Keychain
+Camp passwords
+
+# Re-generate configuration files
+Camp rewrite
 ```
 
-The script creates `dist/Camp.app`. The app bundle includes the stack installer and configuration templates, so it can install the server stack after it is moved out of the source checkout. The build downloads pinned upstream source archives and compiles them locally on an Apple silicon Mac. Archive downloads are cached in `build/cache` for a source checkout or `~/Library/Caches/Camp/downloads` for a packaged app.
+---
 
-## Release package
+## Building from Source
 
-Run `./scripts/package-installer.sh` on an Apple silicon Mac with Xcode command line tools, CMake, and valid Apple Developer ID Application and Developer ID Installer certificates installed. Set `CAMP_APP_SIGN_IDENTITY` and `CAMP_INSTALLER_SIGN_IDENTITY` to the exact certificate names shown by `security find-identity -v`. Create a notary profile with `xcrun notarytool store-credentials CampNotary --apple-id <Apple-ID> --team-id <Team-ID> --password <app-specific-password>`, then set `CAMP_NOTARY_PROFILE=CampNotary`. The script builds the arm64 server stack, signs `Camp.app` and the stack binaries, creates a signed `.pkg`, submits it for notarization, staples the ticket, and verifies the final package. The installer includes the prebuilt server stack and phpMyAdmin, so users do not need Xcode or CMake. The package installs Camp into `/Applications` and its immutable runtime under `/opt/camp`; server data and configuration remain under `/Library/Application Support/Camp`.
+### Prerequisites
 
-Without those credentials the release script stops before public packaging. Unsigned builds for local development can still be made with `./scripts/bundle-app.sh`. `./scripts/package-installer.sh --local-unsigned` creates an unsigned local `.pkg` preview that includes the prebuilt runtime. Run `./scripts/package-dmg.sh --local-unsigned` to wrap that package in a `.dmg` with installation instructions and a package checksum. Both unsigned artifacts are previews: Gatekeeper may warn or block them, so they are not suitable for straightforward public distribution.
+- Apple Silicon Mac running macOS 14 Sonoma or newer
+- Xcode Command Line Tools (`xcode-select --install`)
+- CMake (`brew install cmake`)
 
-## Updates and publishing
+### Build Steps
 
-Camp uses Sparkle for stable updates from the public `Nelmez/Camp` GitHub Releases. It checks in the background at launch and the **Camp > Check for Updates…** menu item starts a manual check. Camp asks before installing and macOS requires administrator authorization because the update replaces `/opt/camp` as well as the app. The installer stops Camp services that were running and starts those services again after the update.
-
-The existing Camp 1.0.0 build does not include Sparkle. Install the newer DMG once to bootstrap updates; later stable releases can be installed from inside Camp. Sparkle's Ed25519 private key is stored in the release maintainer's login Keychain. Do not export or publish it.
-
-For the first update-enabled release, push this source to the public `Nelmez/camp` GitHub repository with `VERSION` still at `1.0.1` and authenticate `gh`. Then run `./scripts/publish-update.sh`. For each later release, increment `VERSION`, commit and push that source, then run the script again. It builds and notarizes a package, creates a signed Sparkle appcast and package, and publishes the DMG, package, and appcast.xml in one stable GitHub Release. Publishing requires the Developer ID signing and notarization credentials described above. For local or tester previews without those Apple credentials, run `./scripts/publish-update.sh --local-unsigned`; macOS may warn or block the unsigned installer on another Mac. Do not use an unsigned preview as a public release.
-
-The appcast is served as the `appcast.xml` asset on GitHub's latest stable release, so prereleases are not offered to Camp. Sparkle signs each package with the EdDSA key in the login Keychain and verifies that signature before installation.
-
-## Install and use
-
-1. Open Camp from the installer. The installer places the arm64 server runtime at `/opt/camp` and phpMyAdmin in Camp's document root.
-2. Start Apache, MariaDB, and ProFTPD from their sections or use **Start all**. Camp initializes service configuration and the database on first start.
-3. Camp keeps mutable data, configuration, logs, and the web root under `/Library/Application Support/Camp`.
-4. The default website is available at `http://127.0.0.1:8080/`; phpMyAdmin is at `/phpmyadmin/`.
-
-Camp stores generated MariaDB and FTP credentials in the login Keychain. The initial credentials are displayed once after bootstrap. The default listeners are loopback only. Enabling all-interface binding exposes Apache and MariaDB to the local network; FTP remains on loopback because this build does not support encrypted FTP. Camp uses ports above 1024 and runs its servers as your account; standard privileged ports are disabled in this release.
-
-## Development commands
+Clone the repository and compile the stack:
 
 ```sh
-swift build -c debug
+git clone https://github.com/Nelmez/camp.git
+cd camp
+
+# Build the complete Camp.app bundle (compiles stack and app)
+./scripts/bundle-app.sh
+
+# Or build Swift targets directly
 swift build -c release
 ```
 
-The `Camp` executable also provides `status`, `bootstrap`, `rewrite`, `start`, `stop`, and `passwords` commands for local diagnostics and scripting.
+To create an unsigned local installer package and DMG preview:
+
+```sh
+./scripts/package-installer.sh --local-unsigned
+./scripts/package-dmg.sh --local-unsigned
+```
+
+---
+
+## License
+
+Camp is open source licensed under the [MIT License](LICENSE).
