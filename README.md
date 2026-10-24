@@ -1,6 +1,6 @@
 # Camp
 
-Camp is a native macOS control panel and local web stack inspired by XAMPP. It manages Apache HTTP Server, PHP, MariaDB, Perl, ProFTPD, and phpMyAdmin as separate processes. Camp targets macOS 14 and newer on Apple silicon Macs (M1 and later).
+Camp is a native (vibe coded) macOS control panel and local web stack inspired by XAMPP. It manages Apache HTTP Server, PHP, MariaDB, Perl, ProFTPD, and phpMyAdmin as separate processes. Camp targets macOS 14 and newer on Apple silicon Macs (M1 and later).
 
 ## Build the app
 
