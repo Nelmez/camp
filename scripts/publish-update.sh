@@ -91,13 +91,18 @@ EOF
 "$SPARKLE_BIN" "$APPCAST" --disable-signing-warning
 
 NOTES="$ROOT/dist/release-notes.txt"
-cat > "$NOTES" <<EOF
+VERSION_NOTES="$ROOT/release-notes/v${VERSION}.md"
+if [[ -f "$VERSION_NOTES" ]]; then
+  cp "$VERSION_NOTES" "$NOTES"
+else
+  cat > "$NOTES" <<EOF
 Camp ${VERSION}
 
 Install the DMG for a new installation or to bootstrap the updater. Camp ${VERSION}
 and later versions can check this stable GitHub Release feed for updates.
 ${RELEASE_NOTICE}
 EOF
+fi
 
 gh release create "v$VERSION" \
   "$PKG#Camp-${VERSION}-${SUFFIX}.pkg" \

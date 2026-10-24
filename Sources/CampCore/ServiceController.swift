@@ -27,7 +27,11 @@ enum ServiceStatus: String {
 struct ServiceController {
     func start(_ service: CampService, settings: CampSettings) throws {
         let plist = try writePlist(service, settings: settings)
-        try loadAndStart(service, plist: plist, timeout: service == .mariadb ? 40 : 12)
+        // A clean MariaDB install can spend a long time building its first
+        // InnoDB tablespaces, especially on slower or nearly-full disks. Do not
+        // report a failed start while that first initialization is still in
+        // progress.
+        try loadAndStart(service, plist: plist, timeout: service == .mariadb ? 180 : 12)
     }
 
     func stop(_ service: CampService, settings: CampSettings) {
@@ -57,7 +61,13 @@ struct ServiceController {
             throw StackError.command("launchctl kickstart \(service.title)", kick.combined)
         }
         if !waitLaunchd(service.label, timeout: timeout) {
-            throw StackError.message("\(service.title) did not stay running.\n\(logTail(service))")
+            let target = "gui/\(getuid())/\(service.label)"
+            let launchd = Shell.run(executable: "/bin/launchctl", arguments: ["print", target]).combined
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let details = [launchd, logTail(service)]
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n\nRecent service output:\n")
+            throw StackError.message("\(service.title) did not stay running.\n\(details)")
         }
     }
 

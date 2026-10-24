@@ -66,7 +66,9 @@ struct StackBootstrap {
     }
 
     private func waitForDatabase(port: Int) throws {
-        let deadline = Date().addingTimeInterval(40)
+        // Match the MariaDB launch timeout above so a clean first-run database
+        // has enough time to finish InnoDB initialization before Camp gives up.
+        let deadline = Date().addingTimeInterval(180)
         let existingPassword = KeychainStore.get(account: KeychainStore.databaseAccount)
         while Date() < deadline {
             if connect(port: port, password: nil)
