@@ -3,12 +3,15 @@ ServerType standalone
 DefaultServer on
 Port {{FTP_PORT}}
 DefaultAddress {{FTP_BIND}}
+PidFile "{{RUN}}/proftpd.pid"
+ScoreboardFile "{{RUN}}/proftpd.scoreboard"
+DelayTable "{{RUN}}/proftpd.delay"
+TransferLog "{{LOGS}}/proftpd.xferlog"
+SystemLog "{{LOGS}}/proftpd.log"
 Umask 022
 MaxInstances 10
 RequireValidShell off
 WtmpLog off
-TransferLog "{{LOGS}}/proftpd.xferlog"
-ScoreboardFile "{{RUN}}/proftpd.scoreboard"
 AuthOrder mod_auth_file.c
 AuthUserFile "{{CONF}}/ftpd.passwd"
 AuthGroupFile "{{CONF}}/ftpd.group"

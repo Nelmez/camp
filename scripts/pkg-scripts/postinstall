@@ -51,6 +51,7 @@ for directory in \
   "$DATA/ftp" "$DATA/tmp" "$DATA/run"; do
   install -d -o "$user" -g "$group" -m 755 "$directory"
 done
+install -d -m 777 /opt/camp/var
 
 if [[ ! -f "$DATA/htdocs/phpmyadmin/index.php" ]]; then
   archive="$APP/Contents/Resources/Camp/stack/phpmyadmin.tar.xz"

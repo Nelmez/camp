@@ -91,6 +91,16 @@ func testTemplateStore() {
     } else {
         assert(false, "Could not load my.cnf.tmpl")
     }
+
+    // Verify proftpd.conf template directs runtime files to Camp data directories
+    if let proftpd = try? TemplateStore.text("proftpd.conf.tmpl") {
+        assert(proftpd.contains("PidFile \"{{RUN}}/proftpd.pid\""), "proftpd.conf contains PidFile")
+        assert(proftpd.contains("ScoreboardFile \"{{RUN}}/proftpd.scoreboard\""), "proftpd.conf contains ScoreboardFile")
+        assert(proftpd.contains("DelayTable \"{{RUN}}/proftpd.delay\""), "proftpd.conf contains DelayTable")
+        assert(proftpd.contains("TransferLog \"{{LOGS}}/proftpd.xferlog\""), "proftpd.conf contains TransferLog")
+    } else {
+        assert(false, "Could not load proftpd.conf.tmpl")
+    }
 }
 
 func testSecrets() {
@@ -352,6 +362,38 @@ func testPHPDatabaseConnectivity() {
     }
 }
 
+func testProFTPDLifecycleAndLogin() {
+    print("\n--- Test: ProFTPD Lifecycle & Login ---")
+    let controller = ServiceController()
+    let settings = CampSettings.load()
+
+    do {
+        try ConfigWriter().write(settings: settings)
+        try controller.start(.proftpd, settings: settings)
+        defer {
+            controller.stop(.proftpd, settings: settings)
+        }
+
+        assert(controller.status(.proftpd, settings: settings) == .running, "ProFTPD is running after start")
+
+        let ftpPassword = KeychainStore.get(account: KeychainStore.ftpAccount) ?? ""
+        let curlResult = Shell.run(
+            executable: "/usr/bin/curl",
+            arguments: [
+                "-s",
+                "-u",
+                "camp:\(ftpPassword)",
+                "ftp://127.0.0.1:\(settings.ftpPort)/"
+            ]
+        )
+        assert(curlResult.status == 0, "ProFTPD accepts curl login and returns exit 0 (got \(curlResult.status): \(curlResult.combined))")
+        assert(curlResult.stdout.contains("README.txt"), "ProFTPD directory listing contains README.txt")
+        assert(FileManager.default.fileExists(atPath: StackLayout.run.appendingPathComponent("proftpd.delay").path), "ProFTPD created DelayTable in run directory")
+    } catch {
+        assert(false, "Failed during ProFTPD lifecycle test: \(error)")
+    }
+}
+
 @main
 enum CampTests {
     static func main() {
@@ -365,6 +407,7 @@ enum CampTests {
         testForeignMyCnfIsolation()
         testServiceControllerIdempotence()
         testPHPDatabaseConnectivity()
+        testProFTPDLifecycleAndLogin()
 
         print("\n===============================")
         print("Summary: \(passed) passed, \(failed) failed")

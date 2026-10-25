@@ -143,6 +143,8 @@ for component in bin sbin lib libexec modules share conf etc htdocs icons error 
     ditto "/opt/camp/$component" "$PKG_WORK/root/opt/camp/$component"
   fi
 done
+mkdir -p "$PKG_WORK/root/opt/camp/var"
+chmod 777 "$PKG_WORK/root/opt/camp/var"
 find "$PKG_WORK/root/opt/camp" -depth \( -name '._*' -o -name '.DS_Store' \) -exec rm -rf {} +
 rm -f "$PKG_WORK/root/opt/camp/bin/bison"
 rm -rf "$PKG_WORK/root/opt/camp/share/bison"
