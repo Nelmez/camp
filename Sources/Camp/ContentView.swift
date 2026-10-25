@@ -40,7 +40,7 @@ struct ContentView: View {
                 ProjectSettingsSheet(project: active)
             }
         }
-        .sheet(isPresented: $showDeleteProjectSheet) {
+        .sheet(isPresented: $showDeleteProjectSheet, onDismiss: { projectToDelete = nil }) {
             if let target = projectToDelete ?? model.activeProject {
                 DeleteProjectSheet(project: target)
             }
@@ -122,20 +122,19 @@ struct ContentView: View {
         HStack(spacing: 8) {
             Menu {
                 Section("Projects") {
-                    ForEach(model.projects) { project in
-                        Button {
-                            if model.activeProject?.id != project.id {
-                                model.switchToProject(project)
-                            }
-                        } label: {
-                            HStack {
-                                if model.activeProject?.id == project.id {
-                                    Image(systemName: "checkmark")
-                                }
-                                Text(project.name)
+                    Picker("Active Project", selection: Binding(
+                        get: { model.activeProject?.id ?? "" },
+                        set: { newId in
+                            if let proj = model.projects.first(where: { $0.id == newId }), proj.id != model.activeProject?.id {
+                                model.switchToProject(proj)
                             }
                         }
+                    )) {
+                        ForEach(model.projects) { project in
+                            Text(project.name).tag(project.id)
+                        }
                     }
+                    .pickerStyle(.inline)
                 }
                 Divider()
                 Button {
@@ -189,10 +188,11 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 6)
-                .background(Color(nsColor: .controlBackgroundColor).opacity(0.7))
+                .background(Color(nsColor: .controlBackgroundColor).opacity(model.busy ? 0.4 : 0.7))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
             }
             .menuStyle(.borderlessButton)
+            .disabled(model.busy)
 
             Button {
                 showNewProjectSheet = true
@@ -200,10 +200,11 @@ struct ContentView: View {
                 Image(systemName: "plus")
                     .font(.system(size: 12, weight: .semibold))
                     .frame(width: 28, height: 28)
-                    .background(Color(nsColor: .controlBackgroundColor).opacity(0.7))
+                    .background(Color(nsColor: .controlBackgroundColor).opacity(model.busy ? 0.35 : 0.7))
                     .clipShape(RoundedRectangle(cornerRadius: 6))
             }
             .buttonStyle(.plain)
+            .disabled(model.busy)
             .help("Create New Project")
         }
         .padding(.horizontal, 12)
@@ -408,6 +409,21 @@ struct NewProjectSheet: View {
                         }
                     }
                     .pickerStyle(.radioGroup)
+                    .onChange(of: selectedTemplate) { _, tmpl in
+                        switch tmpl {
+                        case .blank:
+                            enableApache = true
+                        case .php:
+                            enableApache = true
+                        case .wordpress:
+                            enableApache = true
+                            enableMariaDB = true
+                        case .phpmyadmin:
+                            enableApache = true
+                            enableMariaDB = true
+                            enablePhpMyAdmin = true
+                        }
+                    }
                 }
             }
             .formStyle(.grouped)
@@ -430,7 +446,8 @@ struct NewProjectSheet: View {
             }
         }
         .padding(24)
-        .frame(width: 520, height: 480)
+        .frame(width: 520)
+        .frame(minHeight: 480, maxHeight: 560)
     }
 }
 
@@ -798,6 +815,23 @@ struct MenuBarView: View {
         Divider()
         if let project = model.activeProject {
             Text("Project: \(project.name)")
+            if model.projects.count > 1 {
+                Menu("Switch Project") {
+                    ForEach(model.projects) { proj in
+                        Button {
+                            if model.activeProject?.id != proj.id {
+                                model.switchToProject(proj)
+                            }
+                        } label: {
+                            if model.activeProject?.id == proj.id {
+                                Text("✓ \(proj.name)")
+                            } else {
+                                Text(proj.name)
+                            }
+                        }
+                    }
+                }
+            }
             Divider()
         }
         if model.activeProject?.features.apache != false {

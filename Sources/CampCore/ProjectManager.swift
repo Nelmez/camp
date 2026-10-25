@@ -194,7 +194,7 @@ final class ProjectManager {
         var candidate = slug
         var counter = 2
         let existingIds = Set(existingProjects.map { $0.id.lowercased() })
-        while existingIds.contains(candidate.lowercased()) {
+        while existingIds.contains(candidate.lowercased()) || fileManager.fileExists(atPath: StackLayout.projectsRoot.appendingPathComponent(candidate).path) {
             candidate = "\(slug)-\(counter)"
             counter += 1
         }
@@ -333,6 +333,7 @@ final class ProjectManager {
         // 2. Ensure project directories exist
         try fileManager.createDirectory(at: project.rootUrl, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: project.htdocsUrl, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: project.htdocsUrl.appendingPathComponent("cgi-bin"), withIntermediateDirectories: true)
         let readme = project.rootUrl.appendingPathComponent("README.txt")
         if !fileManager.fileExists(atPath: readme.path) {
             let text = "Welcome to Camp. Upload web assets to your document root or use this folder for FTP transfers.\n"
@@ -349,6 +350,10 @@ final class ProjectManager {
 
         // 4. Update config files pointing to this project's directories and features
         try ConfigWriter().write(settings: validatedSettings, project: project)
+
+        // Save active project so config files and activeProjectId stay in sync
+        config.activeProjectId = project.id
+        try save(config: config)
 
         // 5. Update credentials files for phpMyAdmin
         if project.features.mariadb {
@@ -382,10 +387,6 @@ final class ProjectManager {
         if project.features.ftp {
             try controller.start(.proftpd, settings: validatedSettings)
         }
-
-        // 8. Save active project
-        config.activeProjectId = project.id
-        try save(config: config)
 
         return project
     }
@@ -443,6 +444,11 @@ final class ProjectManager {
             ),
             template: .php
         )
+
+        // Stop services before copying files so MariaDB data is flushed cleanly
+        for service in CampService.allCases {
+            controller.stop(service, settings: settings)
+        }
 
         try fileManager.createDirectory(at: project.rootUrl, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: project.htdocsUrl, withIntermediateDirectories: true)

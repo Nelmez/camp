@@ -4,7 +4,7 @@ import Foundation
 enum CampMain {
     static func main() {
         let arguments = Array(CommandLine.arguments.dropFirst())
-        let commands: Set<String> = ["status", "bootstrap", "rewrite", "start", "stop", "passwords", "project", "projects", "help"]
+        let commands: Set<String> = ["status", "bootstrap", "rewrite", "start", "stop", "passwords", "project", "projects", "help", "--help", "-h"]
         if let command = arguments.first, commands.contains(command) {
             runCampCTL(arguments)
         }
@@ -19,6 +19,15 @@ private func runCampCTL(_ arguments: [String]) -> Never {
 
     func service(named name: String) -> CampService? {
         CampService(rawValue: name)
+    }
+
+    func ensureCLIConfig() -> ProjectsConfig {
+        var config = ProjectManager.shared.load()
+        if config.projects.isEmpty && ProjectManager.shared.hasLegacyData {
+            _ = try? ProjectManager.shared.migrateLegacy(name: "default", settings: settings, controller: controller)
+            config = ProjectManager.shared.load()
+        }
+        return config
     }
 
     func printStatus() {
@@ -52,7 +61,8 @@ private func runCampCTL(_ arguments: [String]) -> Never {
         case "status":
             printStatus()
         case "bootstrap":
-            let report = try StackBootstrap().run(settings: settings)
+            let active = ProjectManager.shared.activeProject
+            let report = try StackBootstrap().run(settings: settings, project: active)
             if let database = report.databasePassword { print("database \(database)") }
             if let ftp = report.ftpPassword { print("ftp \(ftp)") }
             print("bootstrapped")
@@ -64,11 +74,7 @@ private func runCampCTL(_ arguments: [String]) -> Never {
             let sub = arguments.count > 1 ? arguments[1] : "list"
             switch sub {
             case "list":
-                var config = ProjectManager.shared.load()
-                if config.projects.isEmpty && ProjectManager.shared.hasLegacyData {
-                    _ = try? ProjectManager.shared.migrateLegacy(name: "default", settings: settings, controller: controller)
-                    config = ProjectManager.shared.load()
-                }
+                let config = ensureCLIConfig()
                 if config.projects.isEmpty {
                     print("No projects found. Create one with: Camp project create <name>")
                 } else {
@@ -84,7 +90,7 @@ private func runCampCTL(_ arguments: [String]) -> Never {
                     }
                 }
             case "current":
-                let config = ProjectManager.shared.load()
+                let config = ensureCLIConfig()
                 if let active = ProjectManager.shared.getActiveProject(in: config) {
                     var feat: [String] = []
                     if active.features.apache { feat.append("apache") }
@@ -96,21 +102,38 @@ private func runCampCTL(_ arguments: [String]) -> Never {
                     print("No active project")
                 }
             case "switch":
-                guard arguments.count > 2 else {
+                let rest = Array(arguments.dropFirst(2))
+                let positional = rest.filter { !$0.hasPrefix("-") }
+                guard let target = positional.first else {
                     fputs("Missing project name or id.\nUsage: Camp project switch <name-or-id>\n", stderr)
                     exit(1)
                 }
-                let target = arguments[2]
+                _ = ensureCLIConfig()
                 let switched = try ProjectManager.shared.switchProject(to: target, settings: settings, controller: controller)
                 print("Switched to project '\(switched.name)' (id: \(switched.id)).")
                 printStatus()
             case "create":
-                guard arguments.count > 2 else {
-                    fputs("Missing project name.\nUsage: Camp project create <name> [--apache] [--mariadb] [--phpmyadmin] [--ftp]\n", stderr)
+                let rest = Array(arguments.dropFirst(2))
+                let flags = Set(rest.filter { $0.hasPrefix("-") }.map { $0.lowercased() })
+                let positional = rest.filter { !$0.hasPrefix("-") }
+                guard let name = positional.first, !name.trimmingCharacters(in: .whitespaces).isEmpty else {
+                    fputs("Missing project name.\nUsage: Camp project create <name> [--apache] [--mariadb] [--phpmyadmin] [--ftp] [--template <blank|php|wordpress|phpmyadmin>]\n", stderr)
                     exit(1)
                 }
-                let name = arguments[2]
-                let flags = Set(arguments.dropFirst(3).map { $0.lowercased() })
+
+                var selectedTemplate: ProjectTemplate = .blank
+                if let tmplFlag = rest.first(where: { $0.hasPrefix("--template=") }) {
+                    let val = String(tmplFlag.dropFirst("--template=".count)).lowercased()
+                    if let t = ProjectTemplate(rawValue: val) { selectedTemplate = t }
+                } else if let idx = rest.firstIndex(of: "--template"), idx + 1 < rest.count {
+                    let val = rest[idx + 1].lowercased()
+                    if let t = ProjectTemplate(rawValue: val) { selectedTemplate = t }
+                } else if flags.contains("--wordpress") {
+                    selectedTemplate = .wordpress
+                } else if flags.contains("--php") && !flags.contains("--phpmyadmin") {
+                    selectedTemplate = .php
+                }
+
                 let hasFeatureFlags = flags.contains("--apache") || flags.contains("--mariadb") || flags.contains("--phpmyadmin") || flags.contains("--ftp")
                 let features: ProjectFeatures
                 if hasFeatureFlags {
@@ -120,12 +143,21 @@ private func runCampCTL(_ arguments: [String]) -> Never {
                     let ftp = flags.contains("--ftp")
                     features = ProjectFeatures(apache: apache, mariadb: mariadb, phpMyAdmin: phpMyAdmin, ftp: ftp)
                 } else {
-                    features = .standard
+                    switch selectedTemplate {
+                    case .blank:
+                        features = ProjectFeatures(apache: true, mariadb: false, phpMyAdmin: false, ftp: false)
+                    case .php:
+                        features = ProjectFeatures(apache: true, mariadb: false, phpMyAdmin: false, ftp: false)
+                    case .wordpress:
+                        features = ProjectFeatures(apache: true, mariadb: true, phpMyAdmin: false, ftp: false)
+                    case .phpmyadmin:
+                        features = ProjectFeatures(apache: true, mariadb: true, phpMyAdmin: true, ftp: false)
+                    }
                 }
                 let created = try ProjectManager.shared.createProject(
                     name: name,
                     features: features,
-                    template: .blank,
+                    template: selectedTemplate,
                     settings: settings
                 )
                 print("Created project '\(created.name)' (id: \(created.id)).")
@@ -134,8 +166,26 @@ private func runCampCTL(_ arguments: [String]) -> Never {
                     _ = try ProjectManager.shared.switchProject(to: created.id, settings: settings, controller: controller)
                     print("Switched to project '\(created.name)'.")
                 }
+            case "delete":
+                let rest = Array(arguments.dropFirst(2))
+                let flags = Set(rest.filter { $0.hasPrefix("-") }.map { $0.lowercased() })
+                let positional = rest.filter { !$0.hasPrefix("-") }
+                guard let target = positional.first else {
+                    fputs("Missing project name or id.\nUsage: Camp project delete <name-or-id> [--trash]\n", stderr)
+                    exit(1)
+                }
+                let moveToTrash = flags.contains("--trash")
+                let config = ProjectManager.shared.load()
+                guard let proj = config.projects.first(where: {
+                    $0.id.lowercased() == target.lowercased() || $0.name.localizedCaseInsensitiveCompare(target) == .orderedSame
+                }) else {
+                    fputs("Project '\(target)' not found.\n", stderr)
+                    exit(1)
+                }
+                try ProjectManager.shared.deleteProject(id: proj.id, moveToTrash: moveToTrash, settings: settings, controller: controller)
+                print("Deleted project '\(proj.name)'.")
             default:
-                print("usage: Camp project list|current|switch <name-or-id>|create <name> [--apache] [--mariadb] [--phpmyadmin] [--ftp]")
+                print("usage: Camp project list|current|switch <name-or-id>|create <name> [--apache] [--mariadb] [--phpmyadmin] [--ftp]|delete <name-or-id> [--trash]")
             }
         case "start", "stop":
             let name = arguments.count > 1 ? arguments[1] : "all"
@@ -148,6 +198,7 @@ private func runCampCTL(_ arguments: [String]) -> Never {
                 if !FileManager.default.fileExists(atPath: StackLayout.marker.path) {
                     _ = try StackBootstrap().run(settings: settings)
                 }
+                _ = ensureCLIConfig()
                 let activeProject = ProjectManager.shared.activeProject
                 try ConfigWriter().write(settings: try settings.validated(), project: activeProject)
                 let activeFeatures = activeProject?.features ?? .all
@@ -169,8 +220,10 @@ private func runCampCTL(_ arguments: [String]) -> Never {
         case "passwords":
             print("database \(KeychainStore.get(account: KeychainStore.databaseAccount) ?? "")")
             print("ftp \(KeychainStore.get(account: KeychainStore.ftpAccount) ?? "")")
+        case "help", "--help", "-h":
+            print("usage: Camp status|bootstrap|rewrite|start|stop|passwords|project [list|current|switch|create|delete]")
         default:
-            print("usage: Camp status|bootstrap|rewrite|start|stop|passwords|project [list|current|switch|create]")
+            print("usage: Camp status|bootstrap|rewrite|start|stop|passwords|project [list|current|switch|create|delete]")
         }
     } catch {
         fputs(error.localizedDescription + "\n", stderr)

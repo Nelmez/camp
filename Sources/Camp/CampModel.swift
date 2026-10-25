@@ -183,23 +183,27 @@ final class CampModel: ObservableObject {
                 )
             }.value
             self.refreshProjects()
-            self.switchToProject(created)
+            try await self.performSwitch(to: created, snapshot: snapshot)
         }
     }
 
     func switchToProject(_ project: CampProject) {
         run {
-            self.projectSwitchStatus = "Switching to \(project.name)…"
             let snapshot = self.settings
-            let updated = try await Task.detached {
-                let controller = ServiceController()
-                return try ProjectManager.shared.switchProject(to: project.id, settings: snapshot, controller: controller)
-            }.value
-            self.activeProject = updated
-            self.refreshProjects()
-            self.projectSwitchStatus = nil
-            self.notice = "Switched to \(updated.name)."
+            try await self.performSwitch(to: project, snapshot: snapshot)
         }
+    }
+
+    private func performSwitch(to project: CampProject, snapshot: CampSettings) async throws {
+        self.projectSwitchStatus = "Switching to \(project.name)…"
+        let updated = try await Task.detached {
+            let controller = ServiceController()
+            return try ProjectManager.shared.switchProject(to: project.id, settings: snapshot, controller: controller)
+        }.value
+        self.activeProject = updated
+        self.refreshProjects()
+        self.projectSwitchStatus = nil
+        self.notice = "Switched to \(updated.name)."
     }
 
     func updateProject(_ project: CampProject) {

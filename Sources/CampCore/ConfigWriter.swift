@@ -3,6 +3,14 @@ import Foundation
 struct ConfigWriter {
     func write(settings: CampSettings, project: CampProject? = nil) throws {
         try StackLayout.ensureDataDirectories()
+        if let project {
+            try FileManager.default.createDirectory(at: project.rootUrl, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: project.htdocsUrl, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: project.htdocsUrl.appendingPathComponent("cgi-bin"), withIntermediateDirectories: true)
+            if project.features.mariadb {
+                try FileManager.default.createDirectory(at: project.mysqlDataUrl, withIntermediateDirectories: true)
+            }
+        }
         let values = try baseValues(settings: settings, project: project)
         try writeFile(StackLayout.conf.appendingPathComponent("my.cnf"), try TemplateStore.render("my.cnf.tmpl", values))
         try writePHPIni(values: values)
@@ -13,6 +21,11 @@ struct ConfigWriter {
 
     func writeApacheConfig(settings: CampSettings, project: CampProject? = nil) throws {
         try StackLayout.ensureDataDirectories()
+        if let project {
+            try FileManager.default.createDirectory(at: project.rootUrl, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: project.htdocsUrl, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: project.htdocsUrl.appendingPathComponent("cgi-bin"), withIntermediateDirectories: true)
+        }
         let values = try baseValues(settings: settings, project: project)
         var httpdValues = values
         httpdValues["LOAD_MODULES"] = loadModules()

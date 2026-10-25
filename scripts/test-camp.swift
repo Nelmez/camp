@@ -430,6 +430,7 @@ func testProjectSystem() {
     print("\n--- Test: Projects & Templates System ---")
     let mgr = ProjectManager.shared
     let settings = CampSettings.standard
+    let controller = ServiceController()
 
     defer {
         let active = mgr.activeProject
@@ -458,6 +459,13 @@ func testProjectSystem() {
     let slugCollision = mgr.sanitizeId(name: "Blog", existingProjects: [dummyProject])
     assert(slugCollision == "blog-2", "Appends collision suffix on duplicate project id (got \(slugCollision))")
 
+    // Test collision avoidance when directory exists on disk but not in projects config
+    let diskCollisionDir = StackLayout.projectsRoot.appendingPathComponent("disk-retained-test", isDirectory: true)
+    try? FileManager.default.createDirectory(at: diskCollisionDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: diskCollisionDir) }
+    let diskSlugCollision = mgr.sanitizeId(name: "disk-retained-test", existingProjects: [])
+    assert(diskSlugCollision == "disk-retained-test-2", "Avoids collision with retained directories on disk (got \(diskSlugCollision))")
+
     // 3. Project Creation & Template Provisioning
     let testName = "UnitTest Project \(UUID().uuidString.prefix(6))"
     do {
@@ -477,6 +485,21 @@ func testProjectSystem() {
         let indexContent = (try? String(contentsOf: indexFile, encoding: .utf8)) ?? ""
         assert(indexContent.contains(testName), "Template content contains rendered project name")
 
+        // Test other templates provisioning
+        let blankProj = try mgr.createProject(name: "Blank Test \(UUID().uuidString.prefix(4))", features: .standard, template: .blank, settings: settings)
+        defer { try? mgr.deleteProject(id: blankProj.id, moveToTrash: true, settings: settings, controller: ServiceController()) }
+        assert(FileManager.default.fileExists(atPath: blankProj.htdocsUrl.appendingPathComponent("index.html").path), "Provisioned Blank template index.html")
+
+        let wpProj = try mgr.createProject(name: "WP Test \(UUID().uuidString.prefix(4))", features: .standard, template: .wordpress, settings: settings)
+        defer { try? mgr.deleteProject(id: wpProj.id, moveToTrash: true, settings: settings, controller: ServiceController()) }
+        let wpContent = (try? String(contentsOf: wpProj.htdocsUrl.appendingPathComponent("index.php"), encoding: .utf8)) ?? ""
+        assert(wpContent.contains("wordpress") || wpContent.contains("WordPress"), "Provisioned WordPress template index.php")
+
+        let pmaTmplProj = try mgr.createProject(name: "PMA Test \(UUID().uuidString.prefix(4))", features: .standard, template: .phpmyadmin, settings: settings)
+        defer { try? mgr.deleteProject(id: pmaTmplProj.id, moveToTrash: true, settings: settings, controller: controller) }
+        let pmaTmplContent = (try? String(contentsOf: pmaTmplProj.htdocsUrl.appendingPathComponent("index.php"), encoding: .utf8)) ?? ""
+        assert(pmaTmplContent.contains("phpmyadmin") || pmaTmplContent.contains("phpMyAdmin"), "Provisioned phpMyAdmin template index.php")
+
         // 4. ConfigWriter with project
         try ConfigWriter().writeApacheConfig(settings: settings, project: project)
         let httpdConf = try String(contentsOf: StackLayout.conf.appendingPathComponent("httpd.conf"), encoding: .utf8)
@@ -490,8 +513,16 @@ func testProjectSystem() {
         let httpdConfPMA = try String(contentsOf: StackLayout.conf.appendingPathComponent("httpd.conf"), encoding: .utf8)
         assert(httpdConfPMA.contains("Alias /phpmyadmin"), "httpd.conf includes phpMyAdmin alias when feature is enabled")
 
-        // 5. Test Project deletion
-        let controller = ServiceController()
+        // 5. Test Project deletion with moveToTrash: false (retain on disk)
+        let retainProj = try mgr.createProject(name: "Retain Test \(UUID().uuidString.prefix(4))", features: .standard, template: .blank, settings: settings)
+        let retainPath = retainProj.rootUrl.path
+        try mgr.deleteProject(id: retainProj.id, moveToTrash: false, settings: settings, controller: controller)
+        let afterRetainDelete = mgr.load()
+        assert(!afterRetainDelete.projects.contains(where: { $0.id == retainProj.id }), "Project removed from configuration when retained")
+        assert(FileManager.default.fileExists(atPath: retainPath), "Project directory remains on disk when moveToTrash is false")
+        try? FileManager.default.removeItem(atPath: retainPath)
+
+        // 6. Test Project deletion with moveToTrash: true
         try mgr.deleteProject(id: project.id, moveToTrash: true, settings: settings, controller: controller)
         let postDeleteConfig = mgr.load()
         assert(!postDeleteConfig.projects.contains(where: { $0.id == project.id }), "Project removed from configuration after delete")

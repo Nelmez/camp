@@ -10,13 +10,14 @@ struct StackBootstrap {
     private let services = ServiceController()
     private let configs = ConfigWriter()
 
-    func run(settings: CampSettings) throws -> BootstrapReport {
+    func run(settings: CampSettings, project: CampProject? = nil) throws -> BootstrapReport {
         guard StackLayout.installed else {
             throw StackError.message("The Camp stack is not installed yet.")
         }
         try StackLayout.ensureDataDirectories()
         let settings = try settings.validated()
-        try configs.write(settings: settings)
+        let targetProject = project ?? ProjectManager.shared.activeProject
+        try configs.write(settings: settings, project: targetProject)
         try ensureCertificate()
         if !mysqlInitialized {
             try installDatabase()
