@@ -26,7 +26,7 @@ struct StackBootstrap {
         }
         try waitForDatabase(port: settings.mariadbPort)
         var report = BootstrapReport()
-        report.databasePassword = try ensureDatabasePassword(port: settings.mariadbPort)
+        report.databasePassword = try ensureDatabasePassword(port: settings.mariadbPort, settings: settings)
         let blowfish = try ensureBlowfish()
         let ftpPassword = try ensureFTPAccount()
         report.ftpPassword = ftpPassword
@@ -69,10 +69,8 @@ struct StackBootstrap {
         // Match the MariaDB launch timeout above so a clean first-run database
         // has enough time to finish InnoDB initialization before Camp gives up.
         let deadline = Date().addingTimeInterval(180)
-        let existingPassword = KeychainStore.get(account: KeychainStore.databaseAccount)
         while Date() < deadline {
-            if connect(port: port, password: nil)
-                || (existingPassword != nil && connect(port: port, password: existingPassword)) {
+            if isDatabaseResponding(port: port) {
                 return
             }
             Thread.sleep(forTimeInterval: 0.5)
@@ -80,7 +78,25 @@ struct StackBootstrap {
         throw StackError.message("MariaDB did not become ready.\n\(ServiceController().tail(LogKind.mariadb.file))")
     }
 
-    private func ensureDatabasePassword(port: Int) throws -> String? {
+    private func isDatabaseResponding(port: Int) -> Bool {
+        let noAuth = mysql(port: port, password: nil, sql: "SELECT 1")
+        if noAuth.status == 0 || isAccessDenied(noAuth) {
+            return true
+        }
+        if let existing = KeychainStore.get(account: KeychainStore.databaseAccount) {
+            let auth = mysql(port: port, password: existing, sql: "SELECT 1")
+            if auth.status == 0 || isAccessDenied(auth) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func isAccessDenied(_ result: ShellResult) -> Bool {
+        result.stderr.contains("Access denied") || result.stderr.contains("1045")
+    }
+
+    private func ensureDatabasePassword(port: Int, settings: CampSettings) throws -> String? {
         if let existing = KeychainStore.get(account: KeychainStore.databaseAccount),
            connect(port: port, password: existing) {
             return nil
@@ -88,14 +104,58 @@ struct StackBootstrap {
         let fresh = try Secrets.password(length: 20)
         if connect(port: port, password: nil) {
             try grant(port: port, password: fresh, current: nil)
-        } else if let existing = KeychainStore.get(account: KeychainStore.databaseAccount),
-                  connect(port: port, password: existing) {
-            return nil
-        } else {
-            throw StackError.message("MariaDB is running, but Camp could not sign in as root to set a password.")
+            guard connect(port: port, password: fresh) else {
+                throw StackError.message("MariaDB rejected the password Camp just stored.")
+            }
+            try KeychainStore.set(account: KeychainStore.databaseAccount, password: fresh)
+            return fresh
         }
+        if let existing = KeychainStore.get(account: KeychainStore.databaseAccount),
+           connect(port: port, password: existing) {
+            return nil
+        }
+        return try resetRootPasswordViaBootstrap(port: port, settings: settings)
+    }
+
+    private func resetRootPasswordViaBootstrap(port: Int, settings: CampSettings) throws -> String {
+        guard let server = StackLayout.binary(["sbin/mariadbd", "bin/mariadbd", "sbin/mysqld", "libexec/mariadbd"]) else {
+            throw StackError.message("mariadbd server is missing from the Camp prefix.")
+        }
+        let fresh = try Secrets.password(length: 20)
+        let sql = """
+        FLUSH PRIVILEGES;
+        ALTER USER 'root'@'localhost' IDENTIFIED BY '\(fresh)';
+        CREATE USER IF NOT EXISTS 'root'@'127.0.0.1' IDENTIFIED BY '\(fresh)';
+        ALTER USER 'root'@'127.0.0.1' IDENTIFIED BY '\(fresh)';
+        GRANT ALL PRIVILEGES ON *.* TO 'root'@'127.0.0.1' WITH GRANT OPTION;
+        DELETE FROM mysql.user WHERE User='';
+        FLUSH PRIVILEGES;
+        """
+
+        services.stop(.mariadb, settings: settings)
+        let stopDeadline = Date().addingTimeInterval(10)
+        while Date() < stopDeadline && services.status(.mariadb, settings: settings) == .running {
+            Thread.sleep(forTimeInterval: 0.25)
+        }
+
+        let myCnf = StackLayout.conf.appendingPathComponent("my.cnf")
+        let bootstrapResult = Shell.run(
+            executable: server.path,
+            arguments: [
+                "--defaults-file=\(myCnf.path)",
+                "--bootstrap",
+            ],
+            stdin: sql
+        )
+        guard bootstrapResult.status == 0 else {
+            throw StackError.command("mariadbd --bootstrap", bootstrapResult.combined)
+        }
+
+        try services.start(.mariadb, settings: settings)
+        try waitForDatabase(port: port)
+
         guard connect(port: port, password: fresh) else {
-            throw StackError.message("MariaDB rejected the password Camp just stored.")
+            throw StackError.message("MariaDB password reset via bootstrap completed, but Camp could not connect with the new password.")
         }
         try KeychainStore.set(account: KeychainStore.databaseAccount, password: fresh)
         return fresh
@@ -110,7 +170,10 @@ struct StackBootstrap {
         DELETE FROM mysql.user WHERE User='';
         FLUSH PRIVILEGES;
         """
-        let result = mysql(port: port, password: current, sql: sql)
+        var result = mysql(port: port, password: current, sql: sql)
+        if result.status != 0 && FileManager.default.fileExists(atPath: StackLayout.mysqlSocket.path) {
+            result = mysql(port: port, password: current, sql: sql, useSocket: true)
+        }
         if result.status != 0 {
             throw StackError.command("mariadb", result.combined)
         }
@@ -120,19 +183,26 @@ struct StackBootstrap {
         mysql(port: port, password: password, sql: "SELECT 1").status == 0
     }
 
-    private func mysql(port: Int, password: String?, sql: String) -> ShellResult {
+    private func mysql(port: Int, password: String?, sql: String, useSocket: Bool = false) -> ShellResult {
         guard let client = StackLayout.binary(["bin/mariadb", "bin/mysql"]) else {
             return ShellResult(status: 127, stdout: "", stderr: "mariadb client is missing")
         }
         let defaults = StackLayout.tmp.appendingPathComponent("client-\(UUID().uuidString).cnf")
-        var text = """
-        [client]
-        host=127.0.0.1
-        port=\(port)
-        user=root
-        protocol=tcp
+        var text = "[client]\nuser=root\n"
+        if useSocket {
+            text += """
+            socket=\(StackLayout.mysqlSocket.path)
+            protocol=socket
 
-        """
+            """
+        } else {
+            text += """
+            host=127.0.0.1
+            port=\(port)
+            protocol=tcp
+
+            """
+        }
         if let password {
             text += "password=\(password)\n"
         }

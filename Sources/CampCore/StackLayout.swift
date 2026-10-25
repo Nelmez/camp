@@ -16,6 +16,7 @@ enum StackLayout {
     static var run: URL { dataRoot.appendingPathComponent("run", isDirectory: true) }
     static var marker: URL { conf.appendingPathComponent(".bootstrapped") }
     static var autostart: URL { conf.appendingPathComponent("autostart") }
+    static var credentials: URL { conf.appendingPathComponent(".credentials") }
     static var mysqlSocket: URL { tmp.appendingPathComponent("mysql.sock") }
 
     static var installed: Bool {

@@ -96,31 +96,128 @@ enum KeychainStore {
     static let blowfishAccount = "phpmyadmin-blowfish"
 
     static func set(account: String, password: String) throws {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-        SecItemDelete(query as CFDictionary)
-        var add = query
-        add[kSecValueData as String] = Data(password.utf8)
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        let status = SecItemAdd(add as CFDictionary, nil)
-        guard status == errSecSuccess else { throw StackError.keychain(status) }
+        let savedFallback = saveFallback(account: account, password: password)
+        var keychainError: Error?
+        do {
+            try setKeychainOnly(account: account, password: password)
+        } catch {
+            keychainError = error
+        }
+        if !savedFallback, let keychainError {
+            throw keychainError
+        }
     }
 
     static func get(account: String) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess, let data = item as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        // 1. Try file fallback (.credentials) first: fastest, secure, never hangs on Keychain dialogs
+        let fallback = loadFallbackCredentials()
+        if let stored = fallback[account], !stored.isEmpty {
+            return stored
+        }
+
+        // 2. Fallback for MariaDB root password: read from camp-web.php
+        if account == databaseAccount, let webPassword = readDatabasePasswordFromWebConfig() {
+            saveFallback(account: account, password: webPassword)
+            return webPassword
+        }
+
+        // 3. Try Keychain with timeout to prevent hanging on macOS authorization dialogs
+        if let keychainPassword = getFromKeychainWithTimeout(account: account, timeout: 0.5) {
+            saveFallback(account: account, password: keychainPassword)
+            return keychainPassword
+        }
+
+        return nil
+    }
+
+    private static func getFromKeychainWithTimeout(account: String, timeout: TimeInterval) -> String? {
+        let semaphore = DispatchSemaphore(value: 0)
+        var result: String? = nil
+
+        DispatchQueue.global().async {
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: account,
+                kSecReturnData as String: true,
+                kSecMatchLimit as String: kSecMatchLimitOne,
+            ]
+            var item: CFTypeRef?
+            let status = SecItemCopyMatching(query as CFDictionary, &item)
+            if status == errSecSuccess, let data = item as? Data, let password = String(data: data, encoding: .utf8), !password.isEmpty {
+                result = password
+            }
+            semaphore.signal()
+        }
+
+        if semaphore.wait(timeout: .now() + timeout) == .timedOut {
+            return nil
+        }
+        return result
+    }
+
+    private static func setKeychainOnly(account: String, password: String) throws {
+        let semaphore = DispatchSemaphore(value: 0)
+        var status: OSStatus = errSecSuccess
+
+        DispatchQueue.global().async {
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: account,
+            ]
+            SecItemDelete(query as CFDictionary)
+            var add = query
+            add[kSecValueData as String] = Data(password.utf8)
+            add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            status = SecItemAdd(add as CFDictionary, nil)
+            semaphore.signal()
+        }
+
+        if semaphore.wait(timeout: .now() + 1.0) == .timedOut {
+            return
+        }
+        guard status == errSecSuccess else { throw StackError.keychain(status) }
+    }
+
+    @discardableResult
+    private static func saveFallback(account: String, password: String) -> Bool {
+        var dict = loadFallbackCredentials()
+        dict[account] = password
+        guard let data = try? JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .sortedKeys]) else {
+            return false
+        }
+        let url = StackLayout.credentials
+        do {
+            try data.write(to: url, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private static func loadFallbackCredentials() -> [String: String] {
+        let url = StackLayout.credentials
+        guard let data = try? Data(contentsOf: url),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: String] else {
+            return [:]
+        }
+        return json
+    }
+
+    private static func readDatabasePasswordFromWebConfig() -> String? {
+        let web = StackLayout.conf.appendingPathComponent("camp-web.php")
+        guard let content = try? String(contentsOf: web, encoding: .utf8) else { return nil }
+        let pattern = #"'password'\s*=>\s*'([^']*)'"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: content, range: NSRange(content.startIndex..., in: content)),
+              match.numberOfRanges > 1,
+              let range = Range(match.range(at: 1), in: content) else {
+            return nil
+        }
+        let password = String(content[range])
+        return password.isEmpty ? nil : password
     }
 }
 

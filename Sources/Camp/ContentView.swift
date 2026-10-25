@@ -86,13 +86,27 @@ struct ContentView: View {
     }
 
     private func banner(_ text: String, tint: Color) -> some View {
-        Text(text)
-            .font(.callout)
-            .foregroundStyle(tint)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 20)
-            .padding(.vertical, 10)
-            .background(tint.opacity(0.08))
+        Group {
+            if text.contains("\n") {
+                ScrollView(.vertical) {
+                    Text(text)
+                        .font(.callout)
+                        .textSelection(.enabled)
+                        .foregroundStyle(tint)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 120)
+            } else {
+                Text(text)
+                    .font(.callout)
+                    .textSelection(.enabled)
+                    .foregroundStyle(tint)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
+        .background(tint.opacity(0.08))
     }
 }
 
