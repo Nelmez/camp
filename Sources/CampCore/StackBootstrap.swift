@@ -19,8 +19,12 @@ struct StackBootstrap {
         let targetProject = project ?? ProjectManager.shared.activeProject
         try configs.write(settings: settings, project: targetProject)
         try ensureCertificate()
+        let targetData = (targetProject?.features.mariadb == true ? targetProject?.mysqlDataUrl : nil) ?? StackLayout.mysqlData
+        if !FileManager.default.fileExists(atPath: targetData.appendingPathComponent("mysql").path) {
+            try installDatabase(datadir: targetData)
+        }
         if !mysqlInitialized {
-            try installDatabase()
+            try installDatabase(datadir: StackLayout.mysqlData)
         }
         if services.status(.mariadb, settings: settings) != .running {
             try services.start(.mariadb, settings: settings)
@@ -38,7 +42,8 @@ struct StackBootstrap {
             databasePassword: databasePassword,
             port: settings.mariadbPort,
             blowfish: blowfish,
-            bindAllInterfaces: settings.bindAllInterfaces
+            bindAllInterfaces: settings.bindAllInterfaces,
+            project: targetProject
         )
         let readme = StackLayout.ftp.appendingPathComponent("README.txt")
         if !FileManager.default.fileExists(atPath: readme.path) {
@@ -67,6 +72,38 @@ struct StackBootstrap {
         if result.status != 0 {
             throw StackError.command("mariadb-install-db", result.combined)
         }
+        if let password = KeychainStore.get(account: KeychainStore.databaseAccount), !password.isEmpty {
+            try applyRootPasswordViaBootstrap(datadir: targetDir, password: password)
+        }
+    }
+
+    private func applyRootPasswordViaBootstrap(datadir: URL, password: String) throws {
+        guard let server = StackLayout.binary(["sbin/mariadbd", "bin/mariadbd", "sbin/mysqld", "libexec/mariadbd"]) else {
+            return
+        }
+        let sql = """
+        FLUSH PRIVILEGES;
+        ALTER USER 'root'@'localhost' IDENTIFIED BY '\(password)';
+        CREATE USER IF NOT EXISTS 'root'@'127.0.0.1' IDENTIFIED BY '\(password)';
+        ALTER USER 'root'@'127.0.0.1' IDENTIFIED BY '\(password)';
+        CREATE USER IF NOT EXISTS 'root'@'::1' IDENTIFIED BY '\(password)';
+        ALTER USER 'root'@'::1' IDENTIFIED BY '\(password)';
+        GRANT ALL PRIVILEGES ON *.* TO 'root'@'localhost' WITH GRANT OPTION;
+        GRANT ALL PRIVILEGES ON *.* TO 'root'@'127.0.0.1' WITH GRANT OPTION;
+        GRANT ALL PRIVILEGES ON *.* TO 'root'@'::1' WITH GRANT OPTION;
+        DELETE FROM mysql.user WHERE User='';
+        FLUSH PRIVILEGES;
+        """
+        _ = Shell.run(
+            executable: server.path,
+            arguments: [
+                "--no-defaults",
+                "--datadir=\(datadir.path)",
+                "--basedir=\(StackLayout.resolvedPrefix.path)",
+                "--bootstrap",
+            ],
+            stdin: sql
+        )
     }
 
     func waitForDatabase(port: Int) throws {

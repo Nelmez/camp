@@ -238,6 +238,9 @@ final class ProjectManager {
 
         if features.mariadb {
             try fileManager.createDirectory(at: project.mysqlDataUrl, withIntermediateDirectories: true)
+            if !project.isMariaDBInitialized {
+                try StackBootstrap().installDatabase(datadir: project.mysqlDataUrl)
+            }
         }
 
         // Provision template files
@@ -255,6 +258,12 @@ final class ProjectManager {
         var config = load()
         guard let index = config.projects.firstIndex(where: { $0.id == project.id }) else {
             throw StackError.message("Project '\(project.name)' not found.")
+        }
+        if project.features.mariadb {
+            try fileManager.createDirectory(at: project.mysqlDataUrl, withIntermediateDirectories: true)
+            if !project.isMariaDBInitialized {
+                try StackBootstrap().installDatabase(datadir: project.mysqlDataUrl)
+            }
         }
         config.projects[index] = project
         try save(config: config)

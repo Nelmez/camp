@@ -15,6 +15,7 @@ struct ConfigWriter {
         try writeFile(StackLayout.conf.appendingPathComponent("my.cnf"), try TemplateStore.render("my.cnf.tmpl", values))
         try writePHPIni(values: values)
         try writeFile(StackLayout.conf.appendingPathComponent("proftpd.conf"), try TemplateStore.render("proftpd.conf.tmpl", values))
+        try syncFTPUserHome(home: (project?.features.ftp == true ? project?.rootUrl : nil) ?? StackLayout.ftp)
         try writeApacheConfig(settings: settings, project: project)
         try writeAutostart(settings)
     }
@@ -63,6 +64,7 @@ struct ConfigWriter {
         return [
             'host' => '127.0.0.1',
             'port' => \(port),
+            'socket' => '\(StackLayout.mysqlSocket.path)',
             'user' => 'root',
             'password' => '\(databasePassword)',
         ];
@@ -78,6 +80,7 @@ struct ConfigWriter {
         let admin = try TemplateStore.render("phpmyadmin.config.inc.php.tmpl", [
             "BLOWFISH": blowfish,
             "MARIADB_PORT": String(port),
+            "SOCKET": StackLayout.mysqlSocket.path,
             "TMP": StackLayout.tmp.path,
             "AUTH_TYPE": authentication,
             "AUTO_LOGIN": autoLogin,
@@ -232,6 +235,34 @@ struct ConfigWriter {
             body = ""
         }
         try writeFile(StackLayout.autostart, body)
+    }
+
+    private func syncFTPUserHome(home: URL) throws {
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let readme = home.appendingPathComponent("README.txt")
+        if !FileManager.default.fileExists(atPath: readme.path) {
+            try? "Welcome to Camp.\nFiles uploaded to Camp land in this folder.\n".write(to: readme, atomically: true, encoding: .utf8)
+        }
+        let passwd = StackLayout.conf.appendingPathComponent("ftpd.passwd")
+        guard FileManager.default.fileExists(atPath: passwd.path),
+              let text = try? String(contentsOf: passwd, encoding: .utf8) else {
+            return
+        }
+        let lines = text.components(separatedBy: "\n")
+        var newLines: [String] = []
+        for line in lines {
+            if line.hasPrefix("camp:") {
+                var parts = line.components(separatedBy: ":")
+                if parts.count >= 7 {
+                    parts[5] = home.path
+                    newLines.append(parts.joined(separator: ":"))
+                    continue
+                }
+            }
+            newLines.append(line)
+        }
+        try newLines.joined(separator: "\n").write(to: passwd, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: passwd.path)
     }
 
     private func writeFile(_ url: URL, _ contents: String, permissions: Int = 0o644) throws {

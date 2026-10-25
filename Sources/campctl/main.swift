@@ -210,6 +210,10 @@ private func runCampCTL(_ arguments: [String]) -> Never {
                     default: break
                     }
                     try controller.start(item, settings: settings)
+                    if item == .mariadb {
+                        try StackBootstrap().waitForDatabase(port: settings.mariadbPort)
+                        _ = try StackBootstrap().ensureDatabasePassword(port: settings.mariadbPort, settings: settings)
+                    }
                 }
             } else {
                 for item in targets {

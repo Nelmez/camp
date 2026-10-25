@@ -63,6 +63,13 @@ struct ServiceController {
             if FileManager.default.fileExists(atPath: StackLayout.mysqlSocket.path) {
                 try? FileManager.default.removeItem(at: StackLayout.mysqlSocket)
             }
+            // Ensure target MariaDB data directory is initialized before starting daemon
+            let active = ProjectManager.shared.activeProject
+            let datadir = (active?.features.mariadb == true ? active?.mysqlDataUrl : nil) ?? StackLayout.mysqlData
+            let mysqlDb = datadir.appendingPathComponent("mysql")
+            if !FileManager.default.fileExists(atPath: mysqlDb.path) {
+                try StackBootstrap().installDatabase(datadir: datadir)
+            }
         }
         let plist = try writePlist(service, settings: settings)
         // A clean MariaDB install can spend a long time building its first

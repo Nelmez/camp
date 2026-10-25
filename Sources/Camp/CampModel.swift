@@ -160,9 +160,13 @@ final class CampModel: ObservableObject {
         let snapshot = settings
         let currentProject = activeProject
         if !FileManager.default.fileExists(atPath: StackLayout.marker.path) {
-            let report = try await Task.detached { try StackBootstrap().run(settings: snapshot) }.value
+            let report = try await Task.detached { try StackBootstrap().run(settings: snapshot, project: currentProject) }.value
             newDatabasePassword = report.databasePassword
             newFTPPassword = report.ftpPassword
+        } else if let currentProject, currentProject.features.mariadb, !currentProject.isMariaDBInitialized {
+            try await Task.detached {
+                try StackBootstrap().installDatabase(datadir: currentProject.mysqlDataUrl)
+            }.value
         }
         try await Task.detached {
             try ConfigWriter().write(settings: try snapshot.validated(), project: currentProject)
@@ -252,7 +256,13 @@ final class CampModel: ObservableObject {
         run {
             try await self.prepareIfNeeded()
             let snapshot = self.settings
-            try await Task.detached { try ServiceController().start(service, settings: snapshot) }.value
+            try await Task.detached {
+                try ServiceController().start(service, settings: snapshot)
+                if service == .mariadb {
+                    try StackBootstrap().waitForDatabase(port: snapshot.mariadbPort)
+                    _ = try StackBootstrap().ensureDatabasePassword(port: snapshot.mariadbPort, settings: snapshot)
+                }
+            }.value
         }
     }
 
@@ -268,7 +278,13 @@ final class CampModel: ObservableObject {
             try await self.prepareIfNeeded()
             let snapshot = self.settings
             await Task.detached { ServiceController().stop(service, settings: snapshot) }.value
-            try await Task.detached { try ServiceController().start(service, settings: snapshot) }.value
+            try await Task.detached {
+                try ServiceController().start(service, settings: snapshot)
+                if service == .mariadb {
+                    try StackBootstrap().waitForDatabase(port: snapshot.mariadbPort)
+                    _ = try StackBootstrap().ensureDatabasePassword(port: snapshot.mariadbPort, settings: snapshot)
+                }
+            }.value
         }
     }
 
@@ -284,6 +300,8 @@ final class CampModel: ObservableObject {
                 }
                 if currentFeatures.mariadb {
                     try controller.start(.mariadb, settings: snapshot)
+                    try StackBootstrap().waitForDatabase(port: snapshot.mariadbPort)
+                    _ = try StackBootstrap().ensureDatabasePassword(port: snapshot.mariadbPort, settings: snapshot)
                 }
                 if currentFeatures.ftp {
                     try controller.start(.proftpd, settings: snapshot)

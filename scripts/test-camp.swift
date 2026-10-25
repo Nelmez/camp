@@ -101,6 +101,14 @@ func testTemplateStore() {
     } else {
         assert(false, "Could not load proftpd.conf.tmpl")
     }
+
+    // Verify phpmyadmin.config.inc.php template contains MARIADB_PORT and SOCKET
+    if let pma = try? TemplateStore.text("phpmyadmin.config.inc.php.tmpl") {
+        assert(pma.contains("{{MARIADB_PORT}}"), "phpmyadmin template contains MARIADB_PORT")
+        assert(pma.contains("{{SOCKET}}"), "phpmyadmin template contains SOCKET")
+    } else {
+        assert(false, "Could not load phpmyadmin.config.inc.php.tmpl")
+    }
 }
 
 func testSecrets() {
@@ -478,6 +486,7 @@ func testProjectSystem() {
         assert(FileManager.default.fileExists(atPath: project.rootUrl.path), "Created project root directory")
         assert(FileManager.default.fileExists(atPath: project.htdocsUrl.path), "Created project htdocs directory")
         assert(FileManager.default.fileExists(atPath: project.mysqlDataUrl.path), "Created project mysql directory")
+        assert(project.isMariaDBInitialized, "Created project has initialized MariaDB system tables")
         assert(FileManager.default.fileExists(atPath: project.manifestUrl.path), "Created project manifest project.json")
 
         let indexFile = project.htdocsUrl.appendingPathComponent("index.php")
