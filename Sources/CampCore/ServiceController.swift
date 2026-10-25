@@ -26,6 +26,9 @@ enum ServiceStatus: String {
 
 struct ServiceController {
     func start(_ service: CampService, settings: CampSettings) throws {
+        if status(service, settings: settings) == .running {
+            return
+        }
         let plist = try writePlist(service, settings: settings)
         // A clean MariaDB install can spend a long time building its first
         // InnoDB tablespaces, especially on slower or nearly-full disks. Do not
@@ -50,6 +53,16 @@ struct ServiceController {
             let unload = Shell.run(executable: "/bin/launchctl", arguments: ["bootout", domain, plist.path])
             if unload.status != 0 {
                 throw StackError.command("launchctl reload \(service.title)", unload.combined)
+            }
+            let deadline = Date().addingTimeInterval(service == .mariadb ? 15 : 5)
+            while Date() < deadline && launchdStatus(service.label) == .running {
+                Thread.sleep(forTimeInterval: 0.1)
+            }
+            if service == .mariadb {
+                let socketDeadline = Date().addingTimeInterval(5)
+                while Date() < socketDeadline && FileManager.default.fileExists(atPath: StackLayout.mysqlSocket.path) {
+                    Thread.sleep(forTimeInterval: 0.1)
+                }
             }
         }
         let boot = Shell.run(executable: "/bin/launchctl", arguments: ["bootstrap", domain, plist.path])

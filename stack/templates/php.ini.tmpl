@@ -10,6 +10,8 @@ error_log = "{{LOGS}}/php-error.log"
 extension_dir = "{{PHP_EXT_DIR}}"
 mysqli.default_port = {{MARIADB_PORT}}
 mysqli.default_host = 127.0.0.1
+mysqli.default_socket = "{{SOCKET}}"
+pdo_mysql.default_socket = "{{SOCKET}}"
 expose_php = Off
 
 {{EXTENSIONS}}

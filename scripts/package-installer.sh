@@ -146,6 +146,8 @@ done
 find "$PKG_WORK/root/opt/camp" -depth \( -name '._*' -o -name '.DS_Store' \) -exec rm -rf {} +
 rm -f "$PKG_WORK/root/opt/camp/bin/bison"
 rm -rf "$PKG_WORK/root/opt/camp/share/bison"
+rm -f "$PKG_WORK/root/opt/camp/modules/mod_brotli.so"
+rm -f "$PKG_WORK/root/opt/camp/modules/mod_http2.so"
 
 while IFS= read -r binary; do
   description="$(file -b "$binary")"
@@ -155,6 +157,11 @@ while IFS= read -r binary; do
         echo "Non-arm64 code found in the runtime payload: $binary ($description)" >&2
         exit 1
       }
+      bad_deps="$(otool -L "$binary" 2>/dev/null | grep -E '/opt/homebrew|/usr/local' || true)"
+      if [[ -n "$bad_deps" ]]; then
+        echo "Non-system code dependency found in runtime payload: $binary ($bad_deps)" >&2
+        exit 1
+      fi
       if [[ "$MODE" == "release" ]]; then
         codesign --force --timestamp --options runtime --sign "$CAMP_APP_SIGN_IDENTITY" "$binary"
         codesign --verify --strict --verbose=2 "$binary"

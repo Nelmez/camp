@@ -55,7 +55,9 @@ struct StackBootstrap {
         guard let tool = StackLayout.binary(["bin/mariadb-install-db", "bin/mysql_install_db", "scripts/mariadb-install-db"]) else {
             throw StackError.message("mariadb-install-db is not in the Camp prefix.")
         }
+        let myCnf = StackLayout.conf.appendingPathComponent("my.cnf")
         let result = Shell.run(executable: tool.path, arguments: [
+            "--defaults-file=\(myCnf.path)",
             "--datadir=\(StackLayout.mysqlData.path)",
             "--basedir=\(StackLayout.resolvedPrefix.path)",
             "--auth-root-authentication-method=normal",
@@ -93,6 +95,12 @@ struct StackBootstrap {
             let noAuthSocket = mysql(port: port, password: nil, sql: "SELECT 1", useSocket: true)
             if noAuthSocket.status == 0 || isAccessDenied(noAuthSocket) {
                 return true
+            }
+            if let existing = KeychainStore.get(account: KeychainStore.databaseAccount) {
+                let authSocket = mysql(port: port, password: existing, sql: "SELECT 1", useSocket: true)
+                if authSocket.status == 0 || isAccessDenied(authSocket) {
+                    return true
+                }
             }
         }
         return false
@@ -142,8 +150,11 @@ struct StackBootstrap {
         ALTER USER 'root'@'localhost' IDENTIFIED BY '\(fresh)';
         CREATE USER IF NOT EXISTS 'root'@'127.0.0.1' IDENTIFIED BY '\(fresh)';
         ALTER USER 'root'@'127.0.0.1' IDENTIFIED BY '\(fresh)';
+        CREATE USER IF NOT EXISTS 'root'@'::1' IDENTIFIED BY '\(fresh)';
+        ALTER USER 'root'@'::1' IDENTIFIED BY '\(fresh)';
         GRANT ALL PRIVILEGES ON *.* TO 'root'@'localhost' WITH GRANT OPTION;
         GRANT ALL PRIVILEGES ON *.* TO 'root'@'127.0.0.1' WITH GRANT OPTION;
+        GRANT ALL PRIVILEGES ON *.* TO 'root'@'::1' WITH GRANT OPTION;
         DELETE FROM mysql.user WHERE User='';
         FLUSH PRIVILEGES;
         """
@@ -186,8 +197,11 @@ struct StackBootstrap {
         ALTER USER 'root'@'localhost' IDENTIFIED BY '\(password)';
         CREATE USER IF NOT EXISTS 'root'@'127.0.0.1' IDENTIFIED BY '\(password)';
         ALTER USER 'root'@'127.0.0.1' IDENTIFIED BY '\(password)';
+        CREATE USER IF NOT EXISTS 'root'@'::1' IDENTIFIED BY '\(password)';
+        ALTER USER 'root'@'::1' IDENTIFIED BY '\(password)';
         GRANT ALL PRIVILEGES ON *.* TO 'root'@'localhost' WITH GRANT OPTION;
         GRANT ALL PRIVILEGES ON *.* TO 'root'@'127.0.0.1' WITH GRANT OPTION;
+        GRANT ALL PRIVILEGES ON *.* TO 'root'@'::1' WITH GRANT OPTION;
         DELETE FROM mysql.user WHERE User='';
         FLUSH PRIVILEGES;
         """
@@ -235,7 +249,7 @@ struct StackBootstrap {
         }
         defer { try? FileManager.default.removeItem(at: defaults) }
         return Shell.run(executable: client.path, arguments: [
-            "--defaults-extra-file=\(defaults.path)",
+            "--defaults-file=\(defaults.path)",
             "-e",
             sql,
         ])

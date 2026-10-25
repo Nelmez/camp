@@ -67,8 +67,9 @@ struct ConfigWriter {
 
     private func baseValues(settings: CampSettings) throws -> [String: String] {
         let prefix = StackLayout.resolvedPrefix.path
-        let group = Shell.run(executable: "/usr/bin/id", arguments: ["-gn"]).stdout
+        var group = Shell.run(executable: "/usr/bin/id", arguments: ["-gn"]).stdout
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        if group.isEmpty { group = "staff" }
         let privileged = settings.usePrivilegedPorts ? "User \(NSUserName())\nGroup \(group)\n" : ""
         let ftpIdentity = "User \(NSUserName())\nGroup \(group)"
         let masquerade = settings.bindAllInterfaces ? "" : "MasqueradeAddress 127.0.0.1"

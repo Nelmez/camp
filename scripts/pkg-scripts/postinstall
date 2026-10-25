@@ -47,7 +47,7 @@ if [[ -z "$user" || "$uid" -lt 501 || "$user" == loginwindow ]]; then
 fi
 group="$(id -gn "$user")"
 for directory in \
-  "$DATA/htdocs/cgi-bin" "$DATA/conf" "$DATA/logs" "$DATA/data/mysql" \
+  "$DATA" "$DATA/htdocs" "$DATA/htdocs/cgi-bin" "$DATA/conf" "$DATA/logs" "$DATA/data" "$DATA/data/mysql" \
   "$DATA/ftp" "$DATA/tmp" "$DATA/run"; do
   install -d -o "$user" -g "$group" -m 755 "$directory"
 done

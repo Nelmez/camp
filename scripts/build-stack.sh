@@ -179,6 +179,7 @@ cmake_install() {
     -DCMAKE_INSTALL_PREFIX="$PREFIX" \
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
     -DCMAKE_OSX_ARCHITECTURES="$ARCH" \
+    -DCMAKE_IGNORE_PREFIX_PATH="/opt/homebrew;/usr/local" \
     "$@"
   cmake --build "$source/build-camp" -j "$JOBS"
   cmake --install "$source/build-camp"
@@ -264,7 +265,7 @@ fi
 if [[ ! -f "$PREFIX/lib/libzip.dylib" ]]; then
   fetch "https://github.com/nih-at/libzip/archive/refs/tags/v${LIBZIP_VERSION}.tar.gz" "libzip-${LIBZIP_VERSION}.tar.gz"
   dir="$(unpack "libzip-${LIBZIP_VERSION}.tar.gz")"
-  cmake_install "$SRC/$dir" -DBUILD_TOOLS=OFF -DBUILD_REGRESS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_DOC=OFF -DENABLE_OPENSSL=ON -DOPENSSL_ROOT_DIR="$PREFIX"
+  cmake_install "$SRC/$dir" -DBUILD_TOOLS=OFF -DBUILD_REGRESS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_DOC=OFF -DENABLE_OPENSSL=ON -DOPENSSL_ROOT_DIR="$PREFIX" -DENABLE_ZSTD=OFF
 fi
 
 if [[ ! -x "$PREFIX/bin/httpd" ]]; then
@@ -279,6 +280,8 @@ if [[ ! -x "$PREFIX/bin/httpd" ]]; then
     --enable-cgi \
     --enable-rewrite \
     --enable-mods-shared=most \
+    --disable-brotli \
+    --disable-http2 \
     --with-mpm=prefork \
     --with-apr="$PREFIX" \
     --with-apr-util="$PREFIX" \
