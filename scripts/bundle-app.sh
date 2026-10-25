@@ -83,4 +83,8 @@ cat > "$APP/Contents/Info.plist" << 'EOF'
 EOF
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$APP/Contents/Info.plist"
+chmod -R u+w "$APP"
+xattr -cr "$APP"
+codesign --force --deep -s - "$APP"
+codesign --verify --deep --strict --verbose=2 "$APP"
 echo "Built $APP"

@@ -60,6 +60,14 @@ PKG="$ROOT/dist/Camp-${VERSION}-${SUFFIX}.pkg"
 DMG="$ROOT/dist/Camp-${VERSION}-${SUFFIX}.dmg"
 ZIP="$ROOT/dist/Camp-${VERSION}-arm64.zip"
 
+chmod -R u+w "$ROOT/dist/Camp.app"
+xattr -cr "$ROOT/dist/Camp.app"
+if [[ "$MODE" != "release" ]]; then
+  codesign --force --deep -s - "$ROOT/dist/Camp.app"
+fi
+codesign --verify --deep --strict --verbose=2 "$ROOT/dist/Camp.app"
+
+rm -f "$ZIP"
 (cd "$ROOT/dist" && ditto -c -k --keepParent "Camp.app" "Camp-${VERSION}-arm64.zip")
 
 SPARKLE_BIN="$(find "${CAMP_BUILD_DIR:-$ROOT/.build-release}/artifacts" -type f -name sign_update -print -quit 2>/dev/null || true)"

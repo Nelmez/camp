@@ -132,6 +132,11 @@ if [[ "$MODE" == "release" ]]; then
   done
   codesign --force --timestamp --options runtime --sign "$CAMP_APP_SIGN_IDENTITY" "$APP"
   codesign --verify --deep --strict --verbose=2 "$APP"
+else
+  chmod -R u+w "$APP"
+  xattr -cr "$APP"
+  codesign --force --deep -s - "$APP"
+  codesign --verify --deep --strict --verbose=2 "$APP"
 fi
 
 rm -f "$PKG"
