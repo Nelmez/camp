@@ -58,15 +58,19 @@ fi
 
 PKG="$ROOT/dist/Camp-${VERSION}-${SUFFIX}.pkg"
 DMG="$ROOT/dist/Camp-${VERSION}-${SUFFIX}.dmg"
+ZIP="$ROOT/dist/Camp-${VERSION}-arm64.zip"
+
+(cd "$ROOT/dist" && ditto -c -k --keepParent "Camp.app" "Camp-${VERSION}-arm64.zip")
+
 SPARKLE_BIN="$(find "${CAMP_BUILD_DIR:-$ROOT/.build-release}/artifacts" -type f -name sign_update -print -quit 2>/dev/null || true)"
 [[ -x "$SPARKLE_BIN" ]] || {
   echo "Sparkle sign_update was not found. Resolve the Swift package dependencies first." >&2
   exit 1
 }
-[[ -f "$PKG" && -f "$DMG" ]] || { echo "Expected package or DMG is missing." >&2; exit 1; }
+[[ -f "$PKG" && -f "$DMG" && -f "$ZIP" ]] || { echo "Expected package, DMG, or ZIP is missing." >&2; exit 1; }
 
-SIGNATURE="$("$SPARKLE_BIN" -p "$PKG")"
-LENGTH="$(/usr/bin/stat -f '%z' "$PKG")"
+SIGNATURE="$("$SPARKLE_BIN" -p "$ZIP")"
+LENGTH="$(/usr/bin/stat -f '%z' "$ZIP")"
 PUB_DATE="$(/bin/date -u '+%a, %d %b %Y %H:%M:%S +0000')"
 APPCAST="$ROOT/dist/appcast.xml"
 cat > "$APPCAST" <<EOF
@@ -83,7 +87,7 @@ cat > "$APPCAST" <<EOF
 <sparkle:version>${VERSION}</sparkle:version>
 <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
 <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-<enclosure url="https://github.com/${REPO}/releases/download/v${VERSION}/Camp-${VERSION}-${SUFFIX}.pkg" length="${LENGTH}" type="application/octet-stream" sparkle:edSignature="${SIGNATURE}" sparkle:installationType="package" />
+<enclosure url="https://github.com/${REPO}/releases/download/v${VERSION}/Camp-${VERSION}-arm64.zip" length="${LENGTH}" type="application/octet-stream" sparkle:edSignature="${SIGNATURE}" />
 </item>
 </channel>
 </rss>
@@ -107,6 +111,7 @@ fi
 gh release create "v$VERSION" \
   "$PKG#Camp-${VERSION}-${SUFFIX}.pkg" \
   "$DMG#Camp-${VERSION}-${SUFFIX}.dmg" \
+  "$ZIP#Camp-${VERSION}-arm64.zip" \
   "$APPCAST#appcast.xml" \
   --repo "$REPO" \
   --title "Camp $VERSION" \

@@ -22,9 +22,6 @@ final class CampUpdater {
             userDriverDelegate: nil
         )
         updaterController.updater.automaticallyChecksForUpdates = true
-        DispatchQueue.main.async {
-            updaterController.updater.checkForUpdatesInBackground()
-        }
         controller = updaterController
     }
 
