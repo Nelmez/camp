@@ -431,6 +431,11 @@ func testProjectSystem() {
     let mgr = ProjectManager.shared
     let settings = CampSettings.standard
 
+    defer {
+        let active = mgr.activeProject
+        try? ConfigWriter().write(settings: settings, project: active)
+    }
+
     // 1. Feature dependency rules
     let pmaWithoutDB = ProjectFeatures(apache: true, mariadb: false, phpMyAdmin: true, ftp: false)
     assert(!pmaWithoutDB.phpMyAdmin, "phpMyAdmin is disabled when MariaDB is disabled")
