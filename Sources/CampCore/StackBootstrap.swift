@@ -31,7 +31,7 @@ struct StackBootstrap {
         let ftpPassword = try ensureFTPAccount()
         report.ftpPassword = ftpPassword
         guard let databasePassword = KeychainStore.get(account: KeychainStore.databaseAccount) else {
-            throw StackError.message("The MariaDB password is missing from the Keychain.")
+            throw StackError.message("The MariaDB password is missing from the credential store.")
         }
         try configs.writeWebFiles(
             databasePassword: databasePassword,
@@ -79,13 +79,19 @@ struct StackBootstrap {
     }
 
     private func isDatabaseResponding(port: Int) -> Bool {
-        let noAuth = mysql(port: port, password: nil, sql: "SELECT 1")
-        if noAuth.status == 0 || isAccessDenied(noAuth) {
+        let noAuthTCP = mysql(port: port, password: nil, sql: "SELECT 1", useSocket: false)
+        if noAuthTCP.status == 0 || isAccessDenied(noAuthTCP) {
             return true
         }
         if let existing = KeychainStore.get(account: KeychainStore.databaseAccount) {
-            let auth = mysql(port: port, password: existing, sql: "SELECT 1")
-            if auth.status == 0 || isAccessDenied(auth) {
+            let authTCP = mysql(port: port, password: existing, sql: "SELECT 1", useSocket: false)
+            if authTCP.status == 0 || isAccessDenied(authTCP) {
+                return true
+            }
+        }
+        if FileManager.default.fileExists(atPath: StackLayout.mysqlSocket.path) {
+            let noAuthSocket = mysql(port: port, password: nil, sql: "SELECT 1", useSocket: true)
+            if noAuthSocket.status == 0 || isAccessDenied(noAuthSocket) {
                 return true
             }
         }
@@ -93,27 +99,36 @@ struct StackBootstrap {
     }
 
     private func isAccessDenied(_ result: ShellResult) -> Bool {
-        result.stderr.contains("Access denied") || result.stderr.contains("1045")
+        result.combined.contains("Access denied") || result.combined.contains("1045")
     }
 
     private func ensureDatabasePassword(port: Int, settings: CampSettings) throws -> String? {
-        if let existing = KeychainStore.get(account: KeychainStore.databaseAccount),
-           connect(port: port, password: existing) {
+        let existing = KeychainStore.get(account: KeychainStore.databaseAccount)
+        // 1. If existing password already connects over TCP, we are done.
+        if let existing, connect(port: port, password: existing, useSocket: false) {
             return nil
         }
+        // 2. If existing password connects over UNIX socket, ensure root@127.0.0.1 has access so TCP works.
+        if let existing, connect(port: port, password: existing, useSocket: true) {
+            try grant(port: port, password: existing, current: existing, useSocket: true)
+            if connect(port: port, password: existing, useSocket: false) {
+                return nil
+            }
+        }
+        // 3. Try connecting with a blank password (via socket on clean install or via TCP).
         let fresh = try Secrets.password(length: 20)
-        if connect(port: port, password: nil) {
-            try grant(port: port, password: fresh, current: nil)
-            guard connect(port: port, password: fresh) else {
+        let blankSocket = connect(port: port, password: nil, useSocket: true)
+        let blankTCP = connect(port: port, password: nil, useSocket: false)
+        if blankSocket || blankTCP {
+            let viaSocket = blankSocket
+            try grant(port: port, password: fresh, current: nil, useSocket: viaSocket)
+            guard connect(port: port, password: fresh, useSocket: false) else {
                 throw StackError.message("MariaDB rejected the password Camp just stored.")
             }
             try KeychainStore.set(account: KeychainStore.databaseAccount, password: fresh)
             return fresh
         }
-        if let existing = KeychainStore.get(account: KeychainStore.databaseAccount),
-           connect(port: port, password: existing) {
-            return nil
-        }
+        // 4. Fallback of last resort: credentials desynchronized or locked out. Recover via bootstrap.
         return try resetRootPasswordViaBootstrap(port: port, settings: settings)
     }
 
@@ -127,14 +142,19 @@ struct StackBootstrap {
         ALTER USER 'root'@'localhost' IDENTIFIED BY '\(fresh)';
         CREATE USER IF NOT EXISTS 'root'@'127.0.0.1' IDENTIFIED BY '\(fresh)';
         ALTER USER 'root'@'127.0.0.1' IDENTIFIED BY '\(fresh)';
+        GRANT ALL PRIVILEGES ON *.* TO 'root'@'localhost' WITH GRANT OPTION;
         GRANT ALL PRIVILEGES ON *.* TO 'root'@'127.0.0.1' WITH GRANT OPTION;
         DELETE FROM mysql.user WHERE User='';
         FLUSH PRIVILEGES;
         """
 
         services.stop(.mariadb, settings: settings)
-        let stopDeadline = Date().addingTimeInterval(10)
+        let stopDeadline = Date().addingTimeInterval(15)
         while Date() < stopDeadline && services.status(.mariadb, settings: settings) == .running {
+            Thread.sleep(forTimeInterval: 0.25)
+        }
+        let socketDeadline = Date().addingTimeInterval(5)
+        while Date() < socketDeadline && FileManager.default.fileExists(atPath: StackLayout.mysqlSocket.path) {
             Thread.sleep(forTimeInterval: 0.25)
         }
 
@@ -154,24 +174,25 @@ struct StackBootstrap {
         try services.start(.mariadb, settings: settings)
         try waitForDatabase(port: port)
 
-        guard connect(port: port, password: fresh) else {
+        guard connect(port: port, password: fresh, useSocket: false) else {
             throw StackError.message("MariaDB password reset via bootstrap completed, but Camp could not connect with the new password.")
         }
         try KeychainStore.set(account: KeychainStore.databaseAccount, password: fresh)
         return fresh
     }
 
-    private func grant(port: Int, password: String, current: String?) throws {
+    private func grant(port: Int, password: String, current: String?, useSocket: Bool = false) throws {
         let sql = """
         ALTER USER 'root'@'localhost' IDENTIFIED BY '\(password)';
         CREATE USER IF NOT EXISTS 'root'@'127.0.0.1' IDENTIFIED BY '\(password)';
         ALTER USER 'root'@'127.0.0.1' IDENTIFIED BY '\(password)';
+        GRANT ALL PRIVILEGES ON *.* TO 'root'@'localhost' WITH GRANT OPTION;
         GRANT ALL PRIVILEGES ON *.* TO 'root'@'127.0.0.1' WITH GRANT OPTION;
         DELETE FROM mysql.user WHERE User='';
         FLUSH PRIVILEGES;
         """
-        var result = mysql(port: port, password: current, sql: sql)
-        if result.status != 0 && FileManager.default.fileExists(atPath: StackLayout.mysqlSocket.path) {
+        var result = mysql(port: port, password: current, sql: sql, useSocket: useSocket)
+        if result.status != 0 && !useSocket && FileManager.default.fileExists(atPath: StackLayout.mysqlSocket.path) {
             result = mysql(port: port, password: current, sql: sql, useSocket: true)
         }
         if result.status != 0 {
@@ -179,8 +200,8 @@ struct StackBootstrap {
         }
     }
 
-    private func connect(port: Int, password: String?) -> Bool {
-        mysql(port: port, password: password, sql: "SELECT 1").status == 0
+    private func connect(port: Int, password: String?, useSocket: Bool = false) -> Bool {
+        mysql(port: port, password: password, sql: "SELECT 1", useSocket: useSocket).status == 0
     }
 
     private func mysql(port: Int, password: String?, sql: String, useSocket: Bool = false) -> ShellResult {
@@ -246,8 +267,8 @@ struct StackBootstrap {
         try groupLine.write(to: group, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: passwd.path)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: group.path)
+        try KeychainStore.set(account: KeychainStore.ftpAccount, password: password)
         if existing == nil {
-            try KeychainStore.set(account: KeychainStore.ftpAccount, password: password)
             return password
         }
         return nil

@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import LocalAuthentication
 import Security
 
 struct ShellResult {
@@ -121,8 +122,8 @@ enum KeychainStore {
             return webPassword
         }
 
-        // 3. Try Keychain with timeout to prevent hanging on macOS authorization dialogs
-        if let keychainPassword = getFromKeychainWithTimeout(account: account, timeout: 0.5) {
+        // 3. Try Keychain without prompting the user for UI interaction
+        if let keychainPassword = getFromKeychain(account: account) {
             saveFallback(account: account, password: keychainPassword)
             return keychainPassword
         }
@@ -130,53 +131,36 @@ enum KeychainStore {
         return nil
     }
 
-    private static func getFromKeychainWithTimeout(account: String, timeout: TimeInterval) -> String? {
-        let semaphore = DispatchSemaphore(value: 0)
-        var result: String? = nil
-
-        DispatchQueue.global().async {
-            let query: [String: Any] = [
-                kSecClass as String: kSecClassGenericPassword,
-                kSecAttrService as String: service,
-                kSecAttrAccount as String: account,
-                kSecReturnData as String: true,
-                kSecMatchLimit as String: kSecMatchLimitOne,
-            ]
-            var item: CFTypeRef?
-            let status = SecItemCopyMatching(query as CFDictionary, &item)
-            if status == errSecSuccess, let data = item as? Data, let password = String(data: data, encoding: .utf8), !password.isEmpty {
-                result = password
-            }
-            semaphore.signal()
+    private static func getFromKeychain(account: String) -> String? {
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecUseAuthenticationContext as String: context,
+        ]
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecSuccess, let data = item as? Data, let password = String(data: data, encoding: .utf8), !password.isEmpty {
+            return password
         }
-
-        if semaphore.wait(timeout: .now() + timeout) == .timedOut {
-            return nil
-        }
-        return result
+        return nil
     }
 
     private static func setKeychainOnly(account: String, password: String) throws {
-        let semaphore = DispatchSemaphore(value: 0)
-        var status: OSStatus = errSecSuccess
-
-        DispatchQueue.global().async {
-            let query: [String: Any] = [
-                kSecClass as String: kSecClassGenericPassword,
-                kSecAttrService as String: service,
-                kSecAttrAccount as String: account,
-            ]
-            SecItemDelete(query as CFDictionary)
-            var add = query
-            add[kSecValueData as String] = Data(password.utf8)
-            add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-            status = SecItemAdd(add as CFDictionary, nil)
-            semaphore.signal()
-        }
-
-        if semaphore.wait(timeout: .now() + 1.0) == .timedOut {
-            return
-        }
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+        SecItemDelete(query as CFDictionary)
+        var add = query
+        add[kSecValueData as String] = Data(password.utf8)
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        let status = SecItemAdd(add as CFDictionary, nil)
         guard status == errSecSuccess else { throw StackError.keychain(status) }
     }
 
@@ -189,8 +173,15 @@ enum KeychainStore {
         }
         let url = StackLayout.credentials
         do {
-            try data.write(to: url, options: .atomic)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if FileManager.default.fileExists(atPath: url.path) {
+                try data.write(to: url, options: .atomic)
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            } else {
+                guard FileManager.default.createFile(atPath: url.path, contents: data, attributes: [.posixPermissions: 0o600]) else {
+                    return false
+                }
+            }
             return true
         } catch {
             return false

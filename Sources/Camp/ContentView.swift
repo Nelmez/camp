@@ -50,9 +50,9 @@ struct ContentView: View {
         } detail: {
             VStack(alignment: .leading, spacing: 0) {
                 if let error = model.errorMessage {
-                    banner(error, tint: .red)
+                    banner(error, tint: .red, onDismiss: { model.errorMessage = nil })
                 } else if let notice = model.notice {
-                    banner(notice, tint: .secondary)
+                    banner(notice, tint: .secondary, onDismiss: { model.notice = nil })
                 }
                 detail
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -85,23 +85,32 @@ struct ContentView: View {
         }
     }
 
-    private func banner(_ text: String, tint: Color) -> some View {
-        Group {
-            if text.contains("\n") {
-                ScrollView(.vertical) {
+    private func banner(_ text: String, tint: Color, onDismiss: (() -> Void)? = nil) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Group {
+                if text.contains("\n") {
+                    ScrollView(.vertical) {
+                        Text(text)
+                            .font(.callout)
+                            .textSelection(.enabled)
+                            .foregroundStyle(tint)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 120)
+                } else {
                     Text(text)
                         .font(.callout)
                         .textSelection(.enabled)
                         .foregroundStyle(tint)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxHeight: 120)
-            } else {
-                Text(text)
-                    .font(.callout)
-                    .textSelection(.enabled)
-                    .foregroundStyle(tint)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if let onDismiss {
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(tint.opacity(0.7))
+                }
+                .buttonStyle(.plain)
             }
         }
         .padding(.horizontal, 20)
