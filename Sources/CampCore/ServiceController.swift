@@ -176,7 +176,7 @@ struct ServiceController {
                 throw StackError.command("launchctl reload \(service.title)", unload.combined)
             }
             let deadline = Date().addingTimeInterval(service == .mariadb ? 15 : 5)
-            while Date() < deadline && launchdStatus(service.label) == .running {
+            while Date() < deadline && Shell.run(executable: "/bin/launchctl", arguments: ["print", target]).status == 0 {
                 Thread.sleep(forTimeInterval: 0.1)
             }
             if service == .mariadb {
@@ -186,7 +186,11 @@ struct ServiceController {
                 }
             }
         }
-        let boot = Shell.run(executable: "/bin/launchctl", arguments: ["bootstrap", domain, plist.path])
+        var boot = Shell.run(executable: "/bin/launchctl", arguments: ["bootstrap", domain, plist.path])
+        if boot.status != 0 {
+            Thread.sleep(forTimeInterval: 0.5)
+            boot = Shell.run(executable: "/bin/launchctl", arguments: ["bootstrap", domain, plist.path])
+        }
         if boot.status != 0 {
             throw StackError.command("launchctl bootstrap \(service.title)", boot.combined)
         }

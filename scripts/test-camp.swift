@@ -426,6 +426,76 @@ func testServiceMetrics() {
     assert(aggregated.memoryBytes == expectedBytes, "Hierarchy aggregation correctly sums all descendant RSS memory (expected \(expectedBytes), got \(aggregated.memoryBytes))")
 }
 
+func testProjectSystem() {
+    print("\n--- Test: Projects & Templates System ---")
+    let mgr = ProjectManager.shared
+    let settings = CampSettings.standard
+
+    // 1. Feature dependency rules
+    let pmaWithoutDB = ProjectFeatures(apache: true, mariadb: false, phpMyAdmin: true, ftp: false)
+    assert(!pmaWithoutDB.phpMyAdmin, "phpMyAdmin is disabled when MariaDB is disabled")
+
+    let pmaWithoutApache = ProjectFeatures(apache: false, mariadb: true, phpMyAdmin: true, ftp: false)
+    assert(!pmaWithoutApache.phpMyAdmin, "phpMyAdmin is disabled when Apache is disabled")
+
+    let pmaValid = ProjectFeatures(apache: true, mariadb: true, phpMyAdmin: true, ftp: true)
+    assert(pmaValid.phpMyAdmin, "phpMyAdmin is enabled when both Apache and MariaDB are enabled")
+    assert(pmaValid.summary.contains("Apache") && pmaValid.summary.contains("MariaDB") && pmaValid.summary.contains("phpMyAdmin") && pmaValid.summary.contains("FTP"), "Feature summary lists all enabled features")
+
+    // 2. ID Sanitization
+    let slug1 = mgr.sanitizeId(name: "Hello World 123", existingProjects: [])
+    assert(slug1 == "hello-world-123", "Sanitizes name to kebab-case slug (got \(slug1))")
+
+    let slugSpecial = mgr.sanitizeId(name: "Super! @#$% Store -- test", existingProjects: [])
+    assert(slugSpecial == "super-store-test", "Strips special characters and collapses hyphens (got \(slugSpecial))")
+
+    let dummyProject = CampProject(id: "blog", name: "Blog")
+    let slugCollision = mgr.sanitizeId(name: "Blog", existingProjects: [dummyProject])
+    assert(slugCollision == "blog-2", "Appends collision suffix on duplicate project id (got \(slugCollision))")
+
+    // 3. Project Creation & Template Provisioning
+    let testName = "UnitTest Project \(UUID().uuidString.prefix(6))"
+    do {
+        let project = try mgr.createProject(
+            name: testName,
+            features: ProjectFeatures(apache: true, mariadb: true, phpMyAdmin: false, ftp: false),
+            template: .php,
+            settings: settings
+        )
+        assert(FileManager.default.fileExists(atPath: project.rootUrl.path), "Created project root directory")
+        assert(FileManager.default.fileExists(atPath: project.htdocsUrl.path), "Created project htdocs directory")
+        assert(FileManager.default.fileExists(atPath: project.mysqlDataUrl.path), "Created project mysql directory")
+        assert(FileManager.default.fileExists(atPath: project.manifestUrl.path), "Created project manifest project.json")
+
+        let indexFile = project.htdocsUrl.appendingPathComponent("index.php")
+        assert(FileManager.default.fileExists(atPath: indexFile.path), "Provisioned PHP template index.php")
+        let indexContent = (try? String(contentsOf: indexFile, encoding: .utf8)) ?? ""
+        assert(indexContent.contains(testName), "Template content contains rendered project name")
+
+        // 4. ConfigWriter with project
+        try ConfigWriter().writeApacheConfig(settings: settings, project: project)
+        let httpdConf = try String(contentsOf: StackLayout.conf.appendingPathComponent("httpd.conf"), encoding: .utf8)
+        assert(httpdConf.contains(project.htdocsUrl.path), "httpd.conf points DocumentRoot to project htdocs")
+        assert(!httpdConf.contains("Alias /phpmyadmin"), "httpd.conf excludes phpMyAdmin alias when feature is disabled")
+
+        // Test with phpMyAdmin enabled
+        var pmaProject = project
+        pmaProject.features.phpMyAdmin = true
+        try ConfigWriter().writeApacheConfig(settings: settings, project: pmaProject)
+        let httpdConfPMA = try String(contentsOf: StackLayout.conf.appendingPathComponent("httpd.conf"), encoding: .utf8)
+        assert(httpdConfPMA.contains("Alias /phpmyadmin"), "httpd.conf includes phpMyAdmin alias when feature is enabled")
+
+        // 5. Test Project deletion
+        let controller = ServiceController()
+        try mgr.deleteProject(id: project.id, moveToTrash: true, settings: settings, controller: controller)
+        let postDeleteConfig = mgr.load()
+        assert(!postDeleteConfig.projects.contains(where: { $0.id == project.id }), "Project removed from configuration after delete")
+        assert(!FileManager.default.fileExists(atPath: project.rootUrl.path), "Project directory moved to Trash")
+    } catch {
+        assert(false, "Project system test threw error: \(error)")
+    }
+}
+
 @main
 enum CampTests {
     static func main() {
@@ -441,6 +511,7 @@ enum CampTests {
         testPHPDatabaseConnectivity()
         testProFTPDLifecycleAndLogin()
         testServiceMetrics()
+        testProjectSystem()
 
         print("\n===============================")
         print("Summary: \(passed) passed, \(failed) failed")

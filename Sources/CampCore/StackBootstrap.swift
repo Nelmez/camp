@@ -51,14 +51,15 @@ struct StackBootstrap {
         FileManager.default.fileExists(atPath: StackLayout.mysqlData.appendingPathComponent("mysql").path)
     }
 
-    private func installDatabase() throws {
+    func installDatabase(datadir: URL? = nil) throws {
         guard let tool = StackLayout.binary(["bin/mariadb-install-db", "bin/mysql_install_db", "scripts/mariadb-install-db"]) else {
             throw StackError.message("mariadb-install-db is not in the Camp prefix.")
         }
-        let myCnf = StackLayout.conf.appendingPathComponent("my.cnf")
+        let targetDir = datadir ?? StackLayout.mysqlData
+        try FileManager.default.createDirectory(at: targetDir, withIntermediateDirectories: true)
         let result = Shell.run(executable: tool.path, arguments: [
-            "--defaults-file=\(myCnf.path)",
-            "--datadir=\(StackLayout.mysqlData.path)",
+            "--no-defaults",
+            "--datadir=\(targetDir.path)",
             "--basedir=\(StackLayout.resolvedPrefix.path)",
             "--auth-root-authentication-method=normal",
         ])
@@ -67,7 +68,7 @@ struct StackBootstrap {
         }
     }
 
-    private func waitForDatabase(port: Int) throws {
+    func waitForDatabase(port: Int) throws {
         // Match the MariaDB launch timeout above so a clean first-run database
         // has enough time to finish InnoDB initialization before Camp gives up.
         let deadline = Date().addingTimeInterval(180)
@@ -110,7 +111,7 @@ struct StackBootstrap {
         result.combined.contains("Access denied") || result.combined.contains("1045")
     }
 
-    private func ensureDatabasePassword(port: Int, settings: CampSettings) throws -> String? {
+    func ensureDatabasePassword(port: Int, settings: CampSettings) throws -> String? {
         let existing = KeychainStore.get(account: KeychainStore.databaseAccount)
         // 1. If existing password already connects over TCP, we are done.
         if let existing, connect(port: port, password: existing, useSocket: false) {
@@ -129,12 +130,16 @@ struct StackBootstrap {
         let blankTCP = connect(port: port, password: nil, useSocket: false)
         if blankSocket || blankTCP {
             let viaSocket = blankSocket
-            try grant(port: port, password: fresh, current: nil, useSocket: viaSocket)
-            guard connect(port: port, password: fresh, useSocket: false) else {
+            let passwordToSet = existing ?? fresh
+            try grant(port: port, password: passwordToSet, current: nil, useSocket: viaSocket)
+            guard connect(port: port, password: passwordToSet, useSocket: false) else {
                 throw StackError.message("MariaDB rejected the password Camp just stored.")
             }
-            try KeychainStore.set(account: KeychainStore.databaseAccount, password: fresh)
-            return fresh
+            if existing == nil {
+                try KeychainStore.set(account: KeychainStore.databaseAccount, password: fresh)
+                return fresh
+            }
+            return nil
         }
         // 4. Fallback of last resort: credentials desynchronized or locked out. Recover via bootstrap.
         return try resetRootPasswordViaBootstrap(port: port, settings: settings)

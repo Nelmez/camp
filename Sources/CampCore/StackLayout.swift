@@ -18,6 +18,16 @@ enum StackLayout {
     static var autostart: URL { conf.appendingPathComponent("autostart") }
     static var credentials: URL { conf.appendingPathComponent(".credentials") }
     static var mysqlSocket: URL { tmp.appendingPathComponent("mysql.sock") }
+    static var projectsRoot: URL { dataRoot.appendingPathComponent("projects", isDirectory: true) }
+    static var projectsConfig: URL { dataRoot.appendingPathComponent("projects.json") }
+
+    static var sharedPhpMyAdmin: URL {
+        let dedicated = dataRoot.appendingPathComponent("phpmyadmin", isDirectory: true)
+        if FileManager.default.fileExists(atPath: dedicated.appendingPathComponent("index.php").path) {
+            return dedicated
+        }
+        return htdocs.appendingPathComponent("phpmyadmin", isDirectory: true)
+    }
 
     static var installed: Bool {
         binary(["bin/httpd"]) != nil
@@ -26,7 +36,8 @@ enum StackLayout {
             && binary(["sbin/mariadbd", "bin/mariadbd", "sbin/mysqld", "libexec/mariadbd"]) != nil
             && binary(["sbin/proftpd", "bin/proftpd"]) != nil
             && binary(["bin/openssl"]) != nil
-            && FileManager.default.fileExists(atPath: htdocs.appendingPathComponent("phpmyadmin/index.php").path)
+            && (FileManager.default.fileExists(atPath: sharedPhpMyAdmin.appendingPathComponent("index.php").path)
+                || FileManager.default.fileExists(atPath: htdocs.appendingPathComponent("phpmyadmin/index.php").path))
     }
 
     static func binary(_ relativePaths: [String]) -> URL? {
@@ -52,6 +63,7 @@ enum StackLayout {
             ftp,
             tmp,
             run,
+            projectsRoot,
         ]
         for url in directories {
             try manager.createDirectory(at: url, withIntermediateDirectories: true)

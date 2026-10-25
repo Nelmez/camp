@@ -1,27 +1,50 @@
 import Foundation
 
 struct ConfigWriter {
-    func write(settings: CampSettings) throws {
+    func write(settings: CampSettings, project: CampProject? = nil) throws {
         try StackLayout.ensureDataDirectories()
-        let values = try baseValues(settings: settings)
+        let values = try baseValues(settings: settings, project: project)
         try writeFile(StackLayout.conf.appendingPathComponent("my.cnf"), try TemplateStore.render("my.cnf.tmpl", values))
         try writePHPIni(values: values)
         try writeFile(StackLayout.conf.appendingPathComponent("proftpd.conf"), try TemplateStore.render("proftpd.conf.tmpl", values))
-        try writeApacheConfig(settings: settings)
+        try writeApacheConfig(settings: settings, project: project)
         try writeAutostart(settings)
     }
 
-    func writeApacheConfig(settings: CampSettings) throws {
+    func writeApacheConfig(settings: CampSettings, project: CampProject? = nil) throws {
         try StackLayout.ensureDataDirectories()
-        let values = try baseValues(settings: settings)
+        let values = try baseValues(settings: settings, project: project)
         var httpdValues = values
         httpdValues["LOAD_MODULES"] = loadModules()
         httpdValues["LISTEN"] = listenLines(settings)
         httpdValues["SSL_VHOST"] = sslVhost(settings, values: values)
-        try writeFile(StackLayout.conf.appendingPathComponent("httpd.conf"), try TemplateStore.render("httpd.conf.tmpl", httpdValues))
+
+        let enablePMA = (project == nil) || (project?.features.phpMyAdmin == true && project?.features.mariadb == true)
+        if enablePMA {
+            let pmaDir = StackLayout.sharedPhpMyAdmin.path
+            httpdValues["PHPMYADMIN_ALIAS"] = """
+            Alias /phpmyadmin "\(pmaDir)"
+            <Directory "\(pmaDir)">
+                Options Indexes FollowSymLinks
+                AllowOverride All
+                Require all granted
+            </Directory>
+            """
+        } else {
+            httpdValues["PHPMYADMIN_ALIAS"] = ""
+        }
+
+        var rendered = try TemplateStore.render("httpd.conf.tmpl", httpdValues)
+        if enablePMA && !rendered.contains("Alias /phpmyadmin") {
+            let aliasSnippet = httpdValues["PHPMYADMIN_ALIAS"] ?? ""
+            if let insertPoint = rendered.range(of: "<FilesMatch") {
+                rendered.insert(contentsOf: aliasSnippet + "\n\n", at: insertPoint.lowerBound)
+            }
+        }
+        try writeFile(StackLayout.conf.appendingPathComponent("httpd.conf"), rendered)
     }
 
-    func writeWebFiles(databasePassword: String, port: Int, blowfish: String, bindAllInterfaces: Bool) throws {
+    func writeWebFiles(databasePassword: String, port: Int, blowfish: String, bindAllInterfaces: Bool, project: CampProject? = nil) throws {
         let php = """
         <?php
         return [
@@ -46,11 +69,17 @@ struct ConfigWriter {
             "AUTH_TYPE": authentication,
             "AUTO_LOGIN": autoLogin,
         ])
-        let adminURL = StackLayout.htdocs.appendingPathComponent("phpmyadmin/config.inc.php")
+        let adminURL = StackLayout.sharedPhpMyAdmin.appendingPathComponent("config.inc.php")
         try writeFile(adminURL, admin, permissions: 0o600)
-        try writeWelcome("index.php.tmpl", StackLayout.htdocs.appendingPathComponent("index.php"), permissions: 0o644)
-        let cgi = StackLayout.htdocs.appendingPathComponent("cgi-bin/hello.cgi")
-        try writeWelcome("hello.cgi.tmpl", cgi, permissions: 0o755)
+        let legacyAdminURL = StackLayout.htdocs.appendingPathComponent("phpmyadmin/config.inc.php")
+        if legacyAdminURL.path != adminURL.path && FileManager.default.fileExists(atPath: StackLayout.htdocs.appendingPathComponent("phpmyadmin").path) {
+            try? writeFile(legacyAdminURL, admin, permissions: 0o600)
+        }
+        if project == nil {
+            try writeWelcome("index.php.tmpl", StackLayout.htdocs.appendingPathComponent("index.php"), permissions: 0o644)
+            let cgi = StackLayout.htdocs.appendingPathComponent("cgi-bin/hello.cgi")
+            try writeWelcome("hello.cgi.tmpl", cgi, permissions: 0o755)
+        }
     }
 
     private func writeWelcome(_ template: String, _ destination: URL, permissions: Int) throws {
@@ -65,7 +94,7 @@ struct ConfigWriter {
         try writeFile(destination, text, permissions: permissions)
     }
 
-    private func baseValues(settings: CampSettings) throws -> [String: String] {
+    private func baseValues(settings: CampSettings, project: CampProject? = nil) throws -> [String: String] {
         let prefix = StackLayout.resolvedPrefix.path
         var group = Shell.run(executable: "/usr/bin/id", arguments: ["-gn"]).stdout
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -73,14 +102,19 @@ struct ConfigWriter {
         let privileged = settings.usePrivilegedPorts ? "User \(NSUserName())\nGroup \(group)\n" : ""
         let ftpIdentity = "User \(NSUserName())\nGroup \(group)"
         let masquerade = settings.bindAllInterfaces ? "" : "MasqueradeAddress 127.0.0.1"
+
+        let htdocsPath = project?.htdocsUrl.path ?? StackLayout.htdocs.path
+        let mysqlDataPath = project?.mysqlDataUrl.path ?? StackLayout.mysqlData.path
+        let ftpPath = project?.rootUrl.path ?? StackLayout.ftp.path
+
         return [
             "STACK": prefix,
             "ROOT": StackLayout.dataRoot.path,
-            "HTDOCS": StackLayout.htdocs.path,
+            "HTDOCS": htdocsPath,
             "CONF": StackLayout.conf.path,
             "LOGS": StackLayout.logs.path,
-            "DATA": StackLayout.mysqlData.path,
-            "FTP": StackLayout.ftp.path,
+            "DATA": mysqlDataPath,
+            "FTP": ftpPath,
             "TMP": StackLayout.tmp.path,
             "RUN": StackLayout.run.path,
             "SOCKET": StackLayout.mysqlSocket.path,
@@ -98,6 +132,7 @@ struct ConfigWriter {
             "LOAD_MODULES": "",
             "LISTEN": "",
             "SSL_VHOST": "",
+            "PHPMYADMIN_ALIAS": "",
         ]
     }
 

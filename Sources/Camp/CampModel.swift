@@ -24,12 +24,46 @@ final class CampModel: ObservableObject {
     @Published var newDatabasePassword: String?
     @Published var newFTPPassword: String?
 
+    // Project state
+    @Published var projects: [CampProject] = []
+    @Published var activeProject: CampProject?
+    @Published var hasProjects = false
+    @Published var projectSwitchStatus: String?
+
     private let controller = ServiceController()
     private var refreshing = false
 
     init() {
         settings = CampSettings.load()
         stackInstalled = StackLayout.installed
+        refreshProjects()
+    }
+
+    var availableSections: [CampSection] {
+        guard let active = activeProject else {
+            return CampSection.allCases
+        }
+        var sections: [CampSection] = []
+        if active.features.apache { sections.append(.web) }
+        if active.features.mariadb { sections.append(.database) }
+        if active.features.ftp { sections.append(.ftp) }
+        sections.append(.logs)
+        sections.append(.settings)
+        return sections
+    }
+
+    func refreshProjects() {
+        let config = ProjectManager.shared.load()
+        projects = config.projects
+        activeProject = ProjectManager.shared.getActiveProject(in: config)
+        hasProjects = !projects.isEmpty
+        validateCurrentSection()
+    }
+
+    func validateCurrentSection() {
+        if !availableSections.contains(section) {
+            section = availableSections.first ?? .settings
+        }
     }
 
     var anyRunning: Bool {
@@ -49,6 +83,17 @@ final class CampModel: ObservableObject {
     }
 
     func menuBarSummary(for service: CampService) -> String {
+        if let active = activeProject {
+            switch service {
+            case .apache where !active.features.apache:
+                return "\(service.title): Disabled for project"
+            case .mariadb where !active.features.mariadb:
+                return "\(service.title): Disabled for project"
+            case .proftpd where !active.features.ftp:
+                return "\(service.title): Disabled for project"
+            default: break
+            }
+        }
         let isRunning = status(for: service) == .running
         if isRunning, let m = metrics[service] {
             return "\(service.title): Running (\(m.formattedCPU) CPU, \(m.formattedMemory))"
@@ -113,14 +158,90 @@ final class CampModel: ObservableObject {
 
     func prepareIfNeeded() async throws {
         let snapshot = settings
+        let currentProject = activeProject
         if !FileManager.default.fileExists(atPath: StackLayout.marker.path) {
             let report = try await Task.detached { try StackBootstrap().run(settings: snapshot) }.value
             newDatabasePassword = report.databasePassword
             newFTPPassword = report.ftpPassword
         }
-        try await Task.detached { try ConfigWriter().write(settings: try snapshot.validated()) }.value
+        try await Task.detached {
+            try ConfigWriter().write(settings: try snapshot.validated(), project: currentProject)
+        }.value
         settings = try snapshot.validated()
         settings.save()
+    }
+
+    func createProject(name: String, features: ProjectFeatures, template: ProjectTemplate) {
+        run {
+            let snapshot = self.settings
+            let created = try await Task.detached {
+                try ProjectManager.shared.createProject(
+                    name: name,
+                    features: features,
+                    template: template,
+                    settings: snapshot
+                )
+            }.value
+            self.refreshProjects()
+            self.switchToProject(created)
+        }
+    }
+
+    func switchToProject(_ project: CampProject) {
+        run {
+            self.projectSwitchStatus = "Switching to \(project.name)…"
+            let snapshot = self.settings
+            let updated = try await Task.detached {
+                let controller = ServiceController()
+                return try ProjectManager.shared.switchProject(to: project.id, settings: snapshot, controller: controller)
+            }.value
+            self.activeProject = updated
+            self.refreshProjects()
+            self.projectSwitchStatus = nil
+            self.notice = "Switched to \(updated.name)."
+        }
+    }
+
+    func updateProject(_ project: CampProject) {
+        run {
+            let snapshot = self.settings
+            try await Task.detached {
+                let controller = ServiceController()
+                try ProjectManager.shared.updateProject(project, settings: snapshot, controller: controller)
+            }.value
+            self.refreshProjects()
+            self.notice = "Project updated."
+        }
+    }
+
+    func deleteProject(_ project: CampProject, moveToTrash: Bool) {
+        run {
+            let snapshot = self.settings
+            try await Task.detached {
+                let controller = ServiceController()
+                try ProjectManager.shared.deleteProject(
+                    id: project.id,
+                    moveToTrash: moveToTrash,
+                    settings: snapshot,
+                    controller: controller
+                )
+            }.value
+            self.refreshProjects()
+            self.notice = "Project “\(project.name)” deleted."
+        }
+    }
+
+    func migrateLegacy(name: String = "Default Project") {
+        run {
+            let snapshot = self.settings
+            let migrated = try await Task.detached {
+                let controller = ServiceController()
+                return try ProjectManager.shared.migrateLegacy(name: name, settings: snapshot, controller: controller)
+            }.value
+            self.refreshProjects()
+            self.activeProject = migrated
+            self.notice = "Imported into \(migrated.name)."
+        }
     }
 
     func start(_ service: CampService) {
@@ -151,10 +272,17 @@ final class CampModel: ObservableObject {
         run {
             try await self.prepareIfNeeded()
             let snapshot = self.settings
+            let currentFeatures = self.activeProject?.features ?? .all
             try await Task.detached {
                 let controller = ServiceController()
-                for service in CampService.allCases {
-                    try controller.start(service, settings: snapshot)
+                if currentFeatures.apache {
+                    try controller.start(.apache, settings: snapshot)
+                }
+                if currentFeatures.mariadb {
+                    try controller.start(.mariadb, settings: snapshot)
+                }
+                if currentFeatures.ftp {
+                    try controller.start(.proftpd, settings: snapshot)
                 }
             }.value
         }
@@ -182,16 +310,18 @@ final class CampModel: ObservableObject {
             }
             self.settings = draft
             draft.save()
-            try await Task.detached { try ConfigWriter().write(settings: draft) }.value
+            let currentProject = self.activeProject
+            try await Task.detached { try ConfigWriter().write(settings: draft, project: currentProject) }.value
             if FileManager.default.fileExists(atPath: StackLayout.marker.path) {
                 let password = KeychainStore.get(account: KeychainStore.databaseAccount) ?? ""
-                let blowfish = try KeychainStore.get(account: KeychainStore.blowfishAccount) ?? Secrets.password(length: 32)
+                let blowfish = KeychainStore.get(account: KeychainStore.blowfishAccount) ?? (try? Secrets.password(length: 32)) ?? "abcdef0123456789abcdef0123456789"
                 try await Task.detached {
                     try ConfigWriter().writeWebFiles(
                         databasePassword: password,
                         port: draft.mariadbPort,
                         blowfish: blowfish,
-                        bindAllInterfaces: draft.bindAllInterfaces
+                        bindAllInterfaces: draft.bindAllInterfaces,
+                        project: currentProject
                     )
                 }.value
             }
@@ -239,7 +369,13 @@ final class CampModel: ObservableObject {
     }
 
     func revealWebRoot() {
-        NSWorkspace.shared.activateFileViewerSelecting([StackLayout.htdocs])
+        let url = activeProject?.htdocsUrl ?? StackLayout.htdocs
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    func revealProjectFolder() {
+        let url = activeProject?.rootUrl ?? StackLayout.dataRoot
+        NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
     func openConfig(_ name: String) {

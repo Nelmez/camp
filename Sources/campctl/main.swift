@@ -4,7 +4,7 @@ import Foundation
 enum CampMain {
     static func main() {
         let arguments = Array(CommandLine.arguments.dropFirst())
-        let commands: Set<String> = ["status", "bootstrap", "rewrite", "start", "stop", "passwords", "help"]
+        let commands: Set<String> = ["status", "bootstrap", "rewrite", "start", "stop", "passwords", "project", "projects", "help"]
         if let command = arguments.first, commands.contains(command) {
             runCampCTL(arguments)
         }
@@ -22,6 +22,9 @@ private func runCampCTL(_ arguments: [String]) -> Never {
     }
 
     func printStatus() {
+        if let active = ProjectManager.shared.activeProject {
+            print("project \(active.name) (id: \(active.id))")
+        }
         let all = controller.allStatesAndMetrics()
         for item in CampService.allCases {
             let state = all.states[item] ?? .stopped
@@ -54,8 +57,86 @@ private func runCampCTL(_ arguments: [String]) -> Never {
             if let ftp = report.ftpPassword { print("ftp \(ftp)") }
             print("bootstrapped")
         case "rewrite":
-            try ConfigWriter().write(settings: try settings.validated())
+            let active = ProjectManager.shared.activeProject
+            try ConfigWriter().write(settings: try settings.validated(), project: active)
             print("rewritten")
+        case "project", "projects":
+            let sub = arguments.count > 1 ? arguments[1] : "list"
+            switch sub {
+            case "list":
+                var config = ProjectManager.shared.load()
+                if config.projects.isEmpty && ProjectManager.shared.hasLegacyData {
+                    _ = try? ProjectManager.shared.migrateLegacy(name: "default", settings: settings, controller: controller)
+                    config = ProjectManager.shared.load()
+                }
+                if config.projects.isEmpty {
+                    print("No projects found. Create one with: Camp project create <name>")
+                } else {
+                    let activeId = config.activeProjectId
+                    for p in config.projects {
+                        let marker = (p.id == activeId) ? "* " : "  "
+                        var feat: [String] = []
+                        if p.features.apache { feat.append("apache") }
+                        if p.features.mariadb { feat.append("mariadb") }
+                        if p.features.phpMyAdmin { feat.append("phpmyadmin") }
+                        if p.features.ftp { feat.append("ftp") }
+                        print("\(marker)\(p.name) (id: \(p.id)) [\(feat.joined(separator: ", "))]")
+                    }
+                }
+            case "current":
+                let config = ProjectManager.shared.load()
+                if let active = ProjectManager.shared.getActiveProject(in: config) {
+                    var feat: [String] = []
+                    if active.features.apache { feat.append("apache") }
+                    if active.features.mariadb { feat.append("mariadb") }
+                    if active.features.phpMyAdmin { feat.append("phpmyadmin") }
+                    if active.features.ftp { feat.append("ftp") }
+                    print("\(active.name) (id: \(active.id)) [\(feat.joined(separator: ", "))]")
+                } else {
+                    print("No active project")
+                }
+            case "switch":
+                guard arguments.count > 2 else {
+                    fputs("Missing project name or id.\nUsage: Camp project switch <name-or-id>\n", stderr)
+                    exit(1)
+                }
+                let target = arguments[2]
+                let switched = try ProjectManager.shared.switchProject(to: target, settings: settings, controller: controller)
+                print("Switched to project '\(switched.name)' (id: \(switched.id)).")
+                printStatus()
+            case "create":
+                guard arguments.count > 2 else {
+                    fputs("Missing project name.\nUsage: Camp project create <name> [--apache] [--mariadb] [--phpmyadmin] [--ftp]\n", stderr)
+                    exit(1)
+                }
+                let name = arguments[2]
+                let flags = Set(arguments.dropFirst(3).map { $0.lowercased() })
+                let hasFeatureFlags = flags.contains("--apache") || flags.contains("--mariadb") || flags.contains("--phpmyadmin") || flags.contains("--ftp")
+                let features: ProjectFeatures
+                if hasFeatureFlags {
+                    let apache = flags.contains("--apache") || flags.contains("--phpmyadmin")
+                    let mariadb = flags.contains("--mariadb") || flags.contains("--phpmyadmin")
+                    let phpMyAdmin = flags.contains("--phpmyadmin")
+                    let ftp = flags.contains("--ftp")
+                    features = ProjectFeatures(apache: apache, mariadb: mariadb, phpMyAdmin: phpMyAdmin, ftp: ftp)
+                } else {
+                    features = .standard
+                }
+                let created = try ProjectManager.shared.createProject(
+                    name: name,
+                    features: features,
+                    template: .blank,
+                    settings: settings
+                )
+                print("Created project '\(created.name)' (id: \(created.id)).")
+                let config = ProjectManager.shared.load()
+                if config.projects.count == 1 || config.activeProjectId == created.id {
+                    _ = try ProjectManager.shared.switchProject(to: created.id, settings: settings, controller: controller)
+                    print("Switched to project '\(created.name)'.")
+                }
+            default:
+                print("usage: Camp project list|current|switch <name-or-id>|create <name> [--apache] [--mariadb] [--phpmyadmin] [--ftp]")
+            }
         case "start", "stop":
             let name = arguments.count > 1 ? arguments[1] : "all"
             let targets: [CampService] = name == "all" ? Array(CampService.allCases) : [service(named: name)].compactMap { $0 }
@@ -67,8 +148,16 @@ private func runCampCTL(_ arguments: [String]) -> Never {
                 if !FileManager.default.fileExists(atPath: StackLayout.marker.path) {
                     _ = try StackBootstrap().run(settings: settings)
                 }
-                try ConfigWriter().write(settings: try settings.validated())
+                let activeProject = ProjectManager.shared.activeProject
+                try ConfigWriter().write(settings: try settings.validated(), project: activeProject)
+                let activeFeatures = activeProject?.features ?? .all
                 for item in targets {
+                    switch item {
+                    case .apache where !activeFeatures.apache: continue
+                    case .mariadb where !activeFeatures.mariadb: continue
+                    case .proftpd where !activeFeatures.ftp: continue
+                    default: break
+                    }
                     try controller.start(item, settings: settings)
                 }
             } else {
@@ -81,7 +170,7 @@ private func runCampCTL(_ arguments: [String]) -> Never {
             print("database \(KeychainStore.get(account: KeychainStore.databaseAccount) ?? "")")
             print("ftp \(KeychainStore.get(account: KeychainStore.ftpAccount) ?? "")")
         default:
-            print("usage: Camp status|bootstrap|rewrite|start|stop|passwords")
+            print("usage: Camp status|bootstrap|rewrite|start|stop|passwords|project [list|current|switch|create]")
         }
     } catch {
         fputs(error.localizedDescription + "\n", stderr)
