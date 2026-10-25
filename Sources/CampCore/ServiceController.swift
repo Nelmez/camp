@@ -29,12 +29,18 @@ struct ServiceController {
         if status(service, settings: settings) == .running {
             return
         }
+        if service == .mariadb {
+            // Remove any stale socket file left from an unclean shutdown
+            if FileManager.default.fileExists(atPath: StackLayout.mysqlSocket.path) {
+                try? FileManager.default.removeItem(at: StackLayout.mysqlSocket)
+            }
+        }
         let plist = try writePlist(service, settings: settings)
         // A clean MariaDB install can spend a long time building its first
         // InnoDB tablespaces, especially on slower or nearly-full disks. Do not
         // report a failed start while that first initialization is still in
         // progress.
-        try loadAndStart(service, plist: plist, timeout: service == .mariadb ? 180 : 12)
+        try loadAndStart(service, plist: plist, timeout: service == .mariadb ? 180 : 12, settings: settings)
     }
 
     func stop(_ service: CampService, settings: CampSettings) {
@@ -45,7 +51,7 @@ struct ServiceController {
         return launchdStatus(service.label)
     }
 
-    private func loadAndStart(_ service: CampService, plist: URL, timeout: TimeInterval) throws {
+    private func loadAndStart(_ service: CampService, plist: URL, timeout: TimeInterval, settings: CampSettings) throws {
         let domain = "gui/\(getuid())"
         let target = "\(domain)/\(service.label)"
         let printed = Shell.run(executable: "/bin/launchctl", arguments: ["print", target])
@@ -73,7 +79,7 @@ struct ServiceController {
         if kick.status != 0 {
             throw StackError.command("launchctl kickstart \(service.title)", kick.combined)
         }
-        if !waitLaunchd(service.label, timeout: timeout) {
+        if !waitLaunchd(service, timeout: timeout, settings: settings) {
             let target = "gui/\(getuid())/\(service.label)"
             let launchd = Shell.run(executable: "/bin/launchctl", arguments: ["print", target]).combined
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -105,13 +111,41 @@ struct ServiceController {
         return .stopped
     }
 
-    private func waitLaunchd(_ label: String, timeout: TimeInterval) -> Bool {
+    private func waitLaunchd(_ service: CampService, timeout: TimeInterval, settings: CampSettings) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
+        var sawRunning = false
         while Date() < deadline {
-            if launchdStatus(label) == .running { return true }
+            let current = launchdStatus(service.label)
+            if current == .running {
+                sawRunning = true
+                if service != .mariadb {
+                    Thread.sleep(forTimeInterval: 0.5)
+                    return launchdStatus(service.label) == .running
+                }
+                if isMariaDBReady(port: settings.mariadbPort) {
+                    return true
+                }
+            } else if sawRunning {
+                return false
+            }
             Thread.sleep(forTimeInterval: 0.25)
         }
         return false
+    }
+
+    private func isMariaDBReady(port: Int) -> Bool {
+        guard FileManager.default.fileExists(atPath: StackLayout.mysqlSocket.path) else {
+            return false
+        }
+        guard let client = StackLayout.binary(["bin/mariadb", "bin/mysql"]) else {
+            return true
+        }
+        let myCnf = StackLayout.conf.appendingPathComponent("my.cnf")
+        let args = FileManager.default.fileExists(atPath: myCnf.path)
+            ? ["--defaults-file=\(myCnf.path)", "-e", "SELECT 1"]
+            : ["--socket=\(StackLayout.mysqlSocket.path)", "-u", "root", "-e", "SELECT 1"]
+        let res = Shell.run(executable: client.path, arguments: args)
+        return res.status == 0 || res.combined.contains("Access denied") || res.combined.contains("1045")
     }
 
     private func writePlist(_ service: CampService, settings: CampSettings) throws -> URL {

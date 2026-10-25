@@ -137,7 +137,7 @@ func testKeychainAndFallbackStore() {
 
 func testMachOExternalDependencies() {
     print("\n--- Test: Mach-O External Dependency Audit ---")
-    let roots = ["/opt/camp/bin", "/opt/camp/sbin", "/opt/camp/lib", "/opt/camp/modules"]
+    let roots = ["/opt/camp/bin", "/opt/camp/sbin", "/opt/camp/lib", "/opt/camp/modules", "/opt/camp/libexec"]
     var violations = [String]()
 
     for root in roots {
@@ -212,6 +212,146 @@ func testServiceControllerIdempotence() {
     }
 }
 
+func testConfigurationSyntax() {
+    print("\n--- Test: Configuration Syntax ---")
+    if let httpd = StackLayout.binary(["bin/httpd"]) {
+        let conf = StackLayout.conf.appendingPathComponent("httpd.conf")
+        if FileManager.default.fileExists(atPath: conf.path) {
+            let res = Shell.run(executable: httpd.path, arguments: ["-t", "-f", conf.path])
+            assert(res.status == 0, "Apache httpd -t syntax is valid (exit \(res.status))")
+        } else {
+            assert(false, "httpd.conf not found")
+        }
+    } else {
+        assert(false, "httpd binary not found")
+    }
+
+    if let proftpd = StackLayout.binary(["sbin/proftpd", "bin/proftpd"]) {
+        let conf = StackLayout.conf.appendingPathComponent("proftpd.conf")
+        if FileManager.default.fileExists(atPath: conf.path) {
+            let res = Shell.run(executable: proftpd.path, arguments: ["-t", "-c", conf.path])
+            assert(res.status == 0, "ProFTPD proftpd -t syntax is valid (exit \(res.status))")
+        } else {
+            assert(false, "proftpd.conf not found")
+        }
+    } else {
+        assert(false, "proftpd binary not found")
+    }
+}
+
+func testForeignMyCnfIsolation() {
+    print("\n--- Test: Foreign ~/.my.cnf Isolation ---")
+    let home = FileManager.default.homeDirectoryForCurrentUser
+    let myCnf = home.appendingPathComponent(".my.cnf")
+    let backup = home.appendingPathComponent(".my.cnf.camp-test-backup")
+
+    let hadExisting = FileManager.default.fileExists(atPath: myCnf.path)
+    if hadExisting {
+        try? FileManager.default.moveItem(at: myCnf, to: backup)
+    }
+
+    let poisonConfig = """
+    [mariadbd]
+    totally_invalid_server_directive_should_be_ignored = 12345
+    [client]
+    totally_invalid_client_directive_should_be_ignored = 67890
+    """
+    do {
+        try poisonConfig.write(to: myCnf, atomically: true, encoding: .utf8)
+        defer {
+            try? FileManager.default.removeItem(at: myCnf)
+            if hadExisting {
+                try? FileManager.default.moveItem(at: backup, to: myCnf)
+            }
+        }
+
+        if let client = StackLayout.binary(["bin/mariadb", "bin/mysql"]) {
+            let campCnf = StackLayout.conf.appendingPathComponent("my.cnf")
+            let res = Shell.run(executable: client.path, arguments: [
+                "--defaults-file=\(campCnf.path)",
+                "-e", "SELECT 1",
+            ])
+            assert(!res.combined.contains("totally_invalid_client_directive_should_be_ignored"), "Client with --defaults-file ignored poisoned ~/.my.cnf directives")
+        } else {
+            assert(false, "mariadb client binary not found")
+        }
+    } catch {
+        assert(false, "Failed to write poisoned ~/.my.cnf: \(error)")
+    }
+}
+
+func testPHPDatabaseConnectivity() {
+    print("\n--- Test: PHP MariaDB Socket & TCP Connectivity ---")
+    guard let php = StackLayout.binary(["bin/php"]) else {
+        assert(false, "php binary not found")
+        return
+    }
+
+    let controller = ServiceController()
+    let settings = CampSettings.load()
+
+    do {
+        try controller.start(.mariadb, settings: settings)
+        defer {
+            controller.stop(.mariadb, settings: settings)
+        }
+
+        let password = KeychainStore.get(account: KeychainStore.databaseAccount) ?? ""
+        let port = settings.mariadbPort
+        let socket = StackLayout.mysqlSocket.path
+
+        // Test mysqli socket
+        let codeMysqliSocket = """
+        $m = @new mysqli('localhost', 'root', '\(password)', '', 0, '\(socket)');
+        if ($m->connect_errno) { echo $m->connect_error; exit(1); }
+        $res = $m->query('SELECT 1');
+        exit($res ? 0 : 2);
+        """
+        let resMysqliSocket = Shell.run(executable: php.path, arguments: ["-r", codeMysqliSocket])
+        assert(resMysqliSocket.status == 0, "PHP mysqli connects via Unix socket: \(resMysqliSocket.combined)")
+
+        // Test mysqli TCP
+        let codeMysqliTCP = """
+        $m = @new mysqli('127.0.0.1', 'root', '\(password)', '', \(port));
+        if ($m->connect_errno) { echo $m->connect_error; exit(1); }
+        $res = $m->query('SELECT 1');
+        exit($res ? 0 : 2);
+        """
+        let resMysqliTCP = Shell.run(executable: php.path, arguments: ["-r", codeMysqliTCP])
+        assert(resMysqliTCP.status == 0, "PHP mysqli connects via 127.0.0.1 TCP: \(resMysqliTCP.combined)")
+
+        // Test PDO socket
+        let codePDOSocket = """
+        try {
+            $pdo = new PDO('mysql:unix_socket=\(socket)', 'root', '\(password)');
+            $st = $pdo->query('SELECT 1');
+            exit($st ? 0 : 2);
+        } catch (Exception $e) {
+            echo $e->getMessage();
+            exit(1);
+        }
+        """
+        let resPDOSocket = Shell.run(executable: php.path, arguments: ["-r", codePDOSocket])
+        assert(resPDOSocket.status == 0, "PHP PDO connects via Unix socket: \(resPDOSocket.combined)")
+
+        // Test PDO TCP
+        let codePDOTCP = """
+        try {
+            $pdo = new PDO('mysql:host=127.0.0.1;port=\(port)', 'root', '\(password)');
+            $st = $pdo->query('SELECT 1');
+            exit($st ? 0 : 2);
+        } catch (Exception $e) {
+            echo $e->getMessage();
+            exit(1);
+        }
+        """
+        let resPDOTCP = Shell.run(executable: php.path, arguments: ["-r", codePDOTCP])
+        assert(resPDOTCP.status == 0, "PHP PDO connects via 127.0.0.1 TCP: \(resPDOTCP.combined)")
+    } catch {
+        assert(false, "Failed to start MariaDB for PHP test: \(error)")
+    }
+}
+
 @main
 enum CampTests {
     static func main() {
@@ -221,7 +361,10 @@ enum CampTests {
         testKeychainAndFallbackStore()
         testMachOExternalDependencies()
         testStackLayoutAndBinaries()
+        testConfigurationSyntax()
+        testForeignMyCnfIsolation()
         testServiceControllerIdempotence()
+        testPHPDatabaseConnectivity()
 
         print("\n===============================")
         print("Summary: \(passed) passed, \(failed) failed")

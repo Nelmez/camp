@@ -288,6 +288,7 @@ if [[ ! -x "$PREFIX/bin/httpd" ]]; then
     --with-pcre="$PREFIX"
   make -j "$JOBS"
   make install
+  rm -f "$PREFIX/modules/mod_brotli.so" "$PREFIX/modules/mod_http2.so"
   popd >/dev/null
 fi
 
