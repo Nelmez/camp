@@ -298,6 +298,12 @@ struct ServiceRow: View {
                     .frame(width: 8, height: 8)
                 Text(model.status(for: service) == .running ? "Running" : "Stopped")
                     .foregroundStyle(.secondary)
+                if model.status(for: service) == .running, let metrics = model.metrics(for: service) {
+                    Text("(\(metrics.formattedCPU) CPU, \(metrics.formattedMemory))")
+                        .font(.callout)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
                 Button("Start") { model.start(service) }
                     .disabled(model.busy || model.status(for: service) == .running)
                 Button("Stop") { model.stop(service) }
@@ -319,9 +325,9 @@ struct MenuBarView: View {
             NSApp.activate(ignoringOtherApps: true)
         }
         Divider()
-        Text("Apache \(model.apache.rawValue)")
-        Text("MariaDB \(model.mariadb.rawValue)")
-        Text("ProFTPD \(model.proftpd.rawValue)")
+        Text(model.menuBarSummary(for: .apache))
+        Text(model.menuBarSummary(for: .mariadb))
+        Text(model.menuBarSummary(for: .proftpd))
         Divider()
         Button("Start all") { model.startAll() }
         Button("Stop all") { model.stopAll() }

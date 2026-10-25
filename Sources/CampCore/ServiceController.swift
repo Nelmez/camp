@@ -24,6 +24,35 @@ enum ServiceStatus: String {
     case stopped
 }
 
+struct ServiceMetrics: Codable, Equatable {
+    var cpuPercent: Double
+    var memoryBytes: UInt64
+
+    var formattedCPU: String {
+        String(format: "%.1f%%", cpuPercent)
+    }
+
+    var formattedMemory: String {
+        ByteCountFormatter.string(fromByteCount: Int64(memoryBytes), countStyle: .memory)
+    }
+
+    var summary: String {
+        "\(formattedCPU) CPU, \(formattedMemory)"
+    }
+}
+
+struct ProcessRow: Equatable {
+    let pid: Int32
+    let ppid: Int32
+    let cpu: Double
+    let rssKB: UInt64
+}
+
+struct ServiceState: Equatable {
+    var status: ServiceStatus
+    var pid: pid_t?
+}
+
 struct ServiceController {
     func start(_ service: CampService, settings: CampSettings) throws {
         if status(service, settings: settings) == .running {
@@ -49,6 +78,92 @@ struct ServiceController {
 
     func status(_ service: CampService, settings: CampSettings) -> ServiceStatus {
         return launchdStatus(service.label)
+    }
+
+    func serviceState(_ service: CampService) -> ServiceState {
+        let result = Shell.run(executable: "/bin/launchctl", arguments: ["print", "gui/\(getuid())/\(service.label)"])
+        guard result.status == 0 && result.stdout.contains("state = running") else {
+            return ServiceState(status: .stopped, pid: nil)
+        }
+        var foundPid: pid_t? = nil
+        for line in result.stdout.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("pid = ") {
+                let parts = trimmed.components(separatedBy: "=")
+                if parts.count == 2, let parsed = pid_t(parts[1].trimmingCharacters(in: .whitespaces)) {
+                    foundPid = parsed
+                    break
+                }
+            }
+        }
+        return ServiceState(status: .running, pid: foundPid)
+    }
+
+    func servicePid(_ service: CampService) -> pid_t? {
+        serviceState(service).pid
+    }
+
+    func metrics(for service: CampService) -> ServiceMetrics? {
+        guard let pid = servicePid(service) else { return nil }
+        let processes = Self.parseProcessTable()
+        return Self.calculateMetrics(for: pid, in: processes)
+    }
+
+    func allStatesAndMetrics() -> (states: [CampService: ServiceStatus], metrics: [CampService: ServiceMetrics]) {
+        var states = [CampService: ServiceStatus]()
+        var pids = [CampService: pid_t]()
+        for service in CampService.allCases {
+            let state = serviceState(service)
+            states[service] = state.status
+            if let pid = state.pid {
+                pids[service] = pid
+            }
+        }
+        var metrics = [CampService: ServiceMetrics]()
+        if !pids.isEmpty {
+            let processes = Self.parseProcessTable()
+            for (service, pid) in pids {
+                metrics[service] = Self.calculateMetrics(for: pid, in: processes)
+            }
+        }
+        return (states, metrics)
+    }
+
+    static func parseProcessTable() -> [ProcessRow] {
+        let result = Shell.run(executable: "/bin/ps", arguments: ["-A", "-o", "pid,ppid,%cpu,rss"])
+        guard result.status == 0 else { return [] }
+        var rows = [ProcessRow]()
+        for line in result.stdout.components(separatedBy: "\n").dropFirst() {
+            let parts = line.split(whereSeparator: { $0.isWhitespace })
+            guard parts.count >= 4,
+                  let pid = Int32(parts[0]),
+                  let ppid = Int32(parts[1]),
+                  let cpu = Double(parts[2]),
+                  let rss = UInt64(parts[3]) else { continue }
+            rows.append(ProcessRow(pid: pid, ppid: ppid, cpu: cpu, rssKB: rss))
+        }
+        return rows
+    }
+
+    static func calculateMetrics(for rootPid: pid_t, in processes: [ProcessRow]) -> ServiceMetrics {
+        var targetPids = Set<Int32>([rootPid])
+        var changed = true
+        while changed {
+            changed = false
+            for row in processes {
+                if targetPids.contains(row.ppid) && !targetPids.contains(row.pid) {
+                    targetPids.insert(row.pid)
+                    changed = true
+                }
+            }
+        }
+        var totalCPU = 0.0
+        var totalKB: UInt64 = 0
+        for row in processes where targetPids.contains(row.pid) {
+            totalCPU += row.cpu
+            totalKB += row.rssKB
+        }
+        return ServiceMetrics(cpuPercent: totalCPU, memoryBytes: totalKB * 1024)
     }
 
     private func loadAndStart(_ service: CampService, plist: URL, timeout: TimeInterval, settings: CampSettings) throws {

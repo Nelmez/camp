@@ -22,9 +22,14 @@ private func runCampCTL(_ arguments: [String]) -> Never {
     }
 
     func printStatus() {
+        let all = controller.allStatesAndMetrics()
         for item in CampService.allCases {
-            let state = controller.status(item, settings: settings)
-            print("\(item.rawValue) \(state.rawValue)")
+            let state = all.states[item] ?? .stopped
+            if state == .running, let metrics = all.metrics[item] {
+                print("\(item.rawValue) \(state.rawValue) (\(metrics.formattedCPU) CPU, \(metrics.formattedMemory))")
+            } else {
+                print("\(item.rawValue) \(state.rawValue)")
+            }
         }
         if let php = StackLayout.binary(["bin/php"]) {
             let version = Shell.run(executable: php.path, arguments: [

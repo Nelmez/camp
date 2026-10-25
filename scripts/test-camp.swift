@@ -394,6 +394,38 @@ func testProFTPDLifecycleAndLogin() {
     }
 }
 
+func testServiceMetrics() {
+    print("\n--- Test: ServiceMetrics & Process Tree Aggregation ---")
+    let metrics = ServiceMetrics(cpuPercent: 1.54, memoryBytes: 52_428_800)
+    assert(metrics.formattedCPU == "1.5%", "Formats CPU percentage to 1 decimal place")
+    assert(!metrics.formattedMemory.isEmpty, "Formats memory footprint non-empty: \(metrics.formattedMemory)")
+    assert(metrics.summary.contains("1.5% CPU"), "Summary contains formatted CPU: \(metrics.summary)")
+
+    // Test process table parsing
+    let processes = ServiceController.parseProcessTable()
+    assert(!processes.isEmpty, "Process table parser returns running processes (got \(processes.count))")
+
+    // Test current process metric extraction
+    let myPid = getpid()
+    let selfMetrics = ServiceController.calculateMetrics(for: myPid, in: processes)
+    assert(selfMetrics.memoryBytes > 0, "Calculated non-zero memory for current process: \(selfMetrics.formattedMemory)")
+    assert(selfMetrics.cpuPercent >= 0.0, "Calculated non-negative CPU for current process: \(selfMetrics.formattedCPU)")
+
+    // Test synthetic multi-process hierarchy aggregation (e.g. Apache root + child workers)
+    let syntheticProcesses: [ProcessRow] = [
+        ProcessRow(pid: 1000, ppid: 1, cpu: 0.5, rssKB: 10240), // root
+        ProcessRow(pid: 1001, ppid: 1000, cpu: 1.2, rssKB: 5120), // child 1
+        ProcessRow(pid: 1002, ppid: 1000, cpu: 0.8, rssKB: 5120), // child 2
+        ProcessRow(pid: 1003, ppid: 1001, cpu: 0.3, rssKB: 2048), // grandchild
+        ProcessRow(pid: 2000, ppid: 1, cpu: 99.0, rssKB: 99999), // unrelated process
+    ]
+    let aggregated = ServiceController.calculateMetrics(for: 1000, in: syntheticProcesses)
+    let expectedCPU = 0.5 + 1.2 + 0.8 + 0.3 // 2.8
+    let expectedBytes: UInt64 = (10240 + 5120 + 5120 + 2048) * 1024
+    assert(abs(aggregated.cpuPercent - expectedCPU) < 0.001, "Hierarchy aggregation correctly sums all descendant CPUs (expected \(expectedCPU), got \(aggregated.cpuPercent))")
+    assert(aggregated.memoryBytes == expectedBytes, "Hierarchy aggregation correctly sums all descendant RSS memory (expected \(expectedBytes), got \(aggregated.memoryBytes))")
+}
+
 @main
 enum CampTests {
     static func main() {
@@ -408,6 +440,7 @@ enum CampTests {
         testServiceControllerIdempotence()
         testPHPDatabaseConnectivity()
         testProFTPDLifecycleAndLogin()
+        testServiceMetrics()
 
         print("\n===============================")
         print("Summary: \(passed) passed, \(failed) failed")

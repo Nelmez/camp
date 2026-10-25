@@ -8,6 +8,7 @@ final class CampModel: ObservableObject {
     @Published var apache: ServiceStatus = .stopped
     @Published var mariadb: ServiceStatus = .stopped
     @Published var proftpd: ServiceStatus = .stopped
+    @Published var metrics: [CampService: ServiceMetrics] = [:]
     @Published var stackInstalled = false
     @Published var busy = false
     @Published var installing = false
@@ -43,20 +44,33 @@ final class CampModel: ObservableObject {
         }
     }
 
+    func metrics(for service: CampService) -> ServiceMetrics? {
+        status(for: service) == .running ? metrics[service] : nil
+    }
+
+    func menuBarSummary(for service: CampService) -> String {
+        let isRunning = status(for: service) == .running
+        if isRunning, let m = metrics[service] {
+            return "\(service.title): Running (\(m.formattedCPU) CPU, \(m.formattedMemory))"
+        } else if isRunning {
+            return "\(service.title): Running"
+        } else {
+            return "\(service.title): Stopped"
+        }
+    }
+
     func refresh() {
         stackInstalled = StackLayout.installed
         guard stackInstalled, !refreshing else { return }
         refreshing = true
-        let snapshot = settings
         Task.detached {
             let controller = ServiceController()
-            let apache = controller.status(.apache, settings: snapshot)
-            let mariadb = controller.status(.mariadb, settings: snapshot)
-            let proftpd = controller.status(.proftpd, settings: snapshot)
+            let result = controller.allStatesAndMetrics()
             await MainActor.run {
-                self.apache = apache
-                self.mariadb = mariadb
-                self.proftpd = proftpd
+                self.apache = result.states[.apache] ?? .stopped
+                self.mariadb = result.states[.mariadb] ?? .stopped
+                self.proftpd = result.states[.proftpd] ?? .stopped
+                self.metrics = result.metrics
                 self.refreshing = false
             }
         }
